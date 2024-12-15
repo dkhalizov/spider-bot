@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{self, Duration};
 use teloxide::Bot;
@@ -11,7 +12,7 @@ use crate::db::db::TarantulaDB;
 pub struct NotificationSystem {
     bot: Bot,
     db: Arc<TarantulaDB>,
-    chat_ids: Arc<RwLock<Vec<ChatId>>>,
+    user_chats: Arc<RwLock<HashMap<u64, ChatId>>>,
 }
 
 impl NotificationSystem {
@@ -19,14 +20,7 @@ impl NotificationSystem {
         Self {
             bot,
             db,
-            chat_ids: Arc::new(RwLock::new(Vec::new())),
-        }
-    }
-    pub async fn register_chat(&self, chat_id: ChatId) {
-        let mut chat_ids = self.chat_ids.write().await;
-        if !chat_ids.contains(&chat_id) {
-            log::debug!("Registering chat_id: {}", chat_id);
-            chat_ids.push(chat_id);
+            user_chats: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -35,32 +29,42 @@ impl NotificationSystem {
         let feeding_task = self.clone();
         let health_task = self.clone();
         let colony_task = self.clone();
-        let molt_task = self.clone();
 
         tokio::spawn(async move { feeding_task.run_feeding_checks().await });
         tokio::spawn(async move { health_task.run_health_checks().await });
         tokio::spawn(async move { colony_task.run_colony_checks().await });
-        tokio::spawn(async move { molt_task.run_molt_checks().await });
+    }
+
+    pub async fn register_chat(&self, user_id: u64, chat_id: ChatId) {
+        let mut user_chats = self.user_chats.write().await;
+        user_chats.insert(user_id, chat_id);
+        log::debug!("Registered chat_id: {} for user_id: {}", chat_id, user_id);
     }
 
     async fn run_feeding_checks(self) {
         log::debug!("Starting feeding checks");
         let mut interval = time::interval(Duration::from_secs(86400));
+        let mut message = String::with_capacity(1024);
+
         loop {
             interval.tick().await;
-            if let Ok(due_feedings) = self.db.get_tarantulas_due_feeding().await {
-                let chat_ids = self.chat_ids.read().await;
-                for chat_id in chat_ids.iter() {
-                    if !due_feedings.is_empty() {
-                        let mut message = "🍽 *Feeding Due*\n\n".to_string();
-                        for t in &due_feedings {
-                            message.push_str(&format!(
-                                "• {} - {} days since last feeding\n",
-                                t.name,
-                                t.days_since_feeding.unwrap_or(0.0)
-                            ));
+            let user_chats = self.user_chats.read().await;
+
+            for (&user_id, &chat_id) in user_chats.iter() {
+                if let Ok(feedings) = self.db.get_tarantulas_due_feeding(user_id).await {
+                    if !feedings.is_empty() {
+                        message.clear();
+                        message.push_str("🍽 *Feeding Due*\n\n");
+
+                        for t in &feedings {
+                            use std::fmt::Write;
+                            let _ = writeln!(message, "• {} - {} days since last feeding",
+                                             t.name,
+                                             t.days_since_feeding.unwrap_or(0.0)
+                            );
                         }
-                        let _ = self.bot.send_message(*chat_id, message)
+
+                        let _ = self.bot.send_message(chat_id, &message)
                             .parse_mode(ParseMode::Html)
                             .await;
                     }
@@ -72,25 +76,29 @@ impl NotificationSystem {
     async fn run_health_checks(self) {
         log::debug!("Starting health checks");
         let mut interval = time::interval(Duration::from_secs(3600));
+        let mut message = String::with_capacity(1024);
+
         loop {
             interval.tick().await;
-            if let Ok(alerts) = self.db.get_health_alerts().await {
-                let chat_ids = self.chat_ids.read().await;
-                for chat_id in chat_ids.iter() {
-                    let critical = alerts.iter()
-                        .filter(|a| a.alert_type == "Critical")
-                        .collect::<Vec<_>>();
+            let user_chats = self.user_chats.read().await;
 
-                    if !critical.is_empty() {
-                        let mut message = "🚨 *Critical Health Alerts*\n\n".to_string();
-                        for alert in critical {
-                            message.push_str(&format!(
-                                "• {} - {}\n",
-                                alert.name,
-                                alert.alert_type
-                            ));
-                        }
-                        let _ = self.bot.send_message(*chat_id, message)
+            for (&user_id, &chat_id) in user_chats.iter() {
+                if let Ok(alerts) = self.db.get_health_alerts(user_id).await {
+                    let critical = alerts.iter()
+                        .filter(|a| a.alert_type == "Critical");
+
+                    message.clear();
+                    let mut has_alerts = false;
+                    message.push_str("🚨 *Critical Health Alerts*\n\n");
+
+                    for alert in critical {
+                        has_alerts = true;
+                        use std::fmt::Write;
+                        let _ = writeln!(message, "• {} - {}", alert.name, alert.alert_type);
+                    }
+
+                    if has_alerts {
+                        let _ = self.bot.send_message(chat_id, &message)
                             .parse_mode(ParseMode::Html)
                             .await;
                     }
@@ -102,55 +110,32 @@ impl NotificationSystem {
     async fn run_colony_checks(self) {
         log::debug!("Starting colony checks");
         let mut interval = time::interval(Duration::from_secs(86400));
+        let mut message = String::with_capacity(1024);
+
         loop {
             interval.tick().await;
-            if let Ok(colonies) = self.db.get_colony_status().await {
-                let chat_ids = self.chat_ids.read().await;
-                for chat_id in chat_ids.iter() {
+            let user_chats = self.user_chats.read().await;
+
+            for (&user_id, &chat_id) in user_chats.iter() {
+                if let Ok(colonies) = self.db.get_colony_status(user_id).await {
                     let low_colonies = colonies.iter()
-                        .filter(|c| c.weeks_remaining.unwrap_or(0.0) < 2.0)
-                        .collect::<Vec<_>>();
+                        .filter(|c| c.weeks_remaining.unwrap_or(0.0) < 2.0);
 
-                    if !low_colonies.is_empty() {
-                        let mut message = "🦗 *Low Cricket Colony Alert*\n\n".to_string();
-                        for colony in low_colonies {
-                            message.push_str(&format!(
-                                "• {} - {:.1} weeks remaining\n",
-                                colony.colony_name,
-                                colony.weeks_remaining.unwrap_or(0.0)
-                            ));
-                        }
-                        let _ = self.bot.send_message(*chat_id, message)
-                            .parse_mode(ParseMode::Html)
-                            .await;
+                    message.clear();
+                    let mut has_alerts = false;
+                    message.push_str("🦗 *Low Cricket Colony Alert*\n\n");
+
+                    for colony in low_colonies {
+                        has_alerts = true;
+                        use std::fmt::Write;
+                        let _ = writeln!(message, "• {} - {:.1} weeks remaining",
+                                         colony.colony_name,
+                                         colony.weeks_remaining.unwrap_or(0.0)
+                        );
                     }
-                }
-            }
-        }
-    }
 
-    async fn run_molt_checks(self) {
-        log::debug!("Starting molt checks");
-        let mut interval = time::interval(Duration::from_secs(86400));
-        loop {
-            interval.tick().await;
-            if let Ok(alerts) = self.db.get_health_alerts().await {
-                let chat_ids = self.chat_ids.read().await;
-                for chat_id in chat_ids.iter() {
-                    let molt_alerts = alerts.iter()
-                        .filter(|a| a.alert_type == "Extended Pre-molt")
-                        .collect::<Vec<_>>();
-
-                    if !molt_alerts.is_empty() {
-                        let mut message = "🐾 *Molt Status Alert*\n\n".to_string();
-                        for alert in molt_alerts {
-                            message.push_str(&format!(
-                                "• {} - in pre-molt for {} days\n",
-                                alert.name,
-                                alert.days_in_state
-                            ));
-                        }
-                        let _ = self.bot.send_message(*chat_id, message)
+                    if has_alerts {
+                        let _ = self.bot.send_message(chat_id, &message)
                             .parse_mode(ParseMode::Html)
                             .await;
                     }

@@ -5,3 +5,4 @@ pub mod models;
 pub mod molt;
 pub mod tarantula;
 pub mod enums;
+pub(crate) mod user;

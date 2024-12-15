@@ -1,9 +1,12 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum TarantulaError {
+pub enum BotError {
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
+
+    #[error("Pool error: {0}")]
+    DatabasePool(#[from] r2d2::Error),
 
     #[error("Telegram error: {0}")]
     Telegram(#[from] teloxide::RequestError),
@@ -19,12 +22,4 @@ pub enum TarantulaError {
 
     #[error("Operation failed: {0}")]
     OperationError(String),
-}
-
-#[derive(Error, Debug)]
-enum BotError {
-    #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
-    #[error("Telegram error: {0}")]
-    Telegram(#[from] teloxide::RequestError),
 }

@@ -31,6 +31,14 @@ impl HealthStatus {
             _ => HealthStatus::Healthy,
         }
     }
+    
+    pub fn to_id(&self) -> usize {
+        match self {
+            HealthStatus::Healthy => 1,
+            HealthStatus::Monitor => 2,
+            HealthStatus::Critical => 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

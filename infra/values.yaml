@@ -1,0 +1,24 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/guliguligagaga/spider-bot
+  tag: latest
+  pullPolicy: Always
+imagePullSecrets:
+  - name: github-registry
+
+env:
+  - name: TELEGRAM_BOT_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: spider-bot-secret
+        key: bot-token
+  - name: DEFAULT_CHAT_ID
+    value: "141671143"
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi

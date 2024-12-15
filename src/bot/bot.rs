@@ -1,26 +1,68 @@
+use crate::bot::callbacks::BotCallback;
+use crate::bot::callbacks::BotCallback::ColonyCountUpdate;
+use crate::bot::callbacks::BotCallback::ColonyGetCount;
+use crate::bot::callbacks::BotCallback::ColonyMaintenanceMenu;
+use crate::bot::callbacks::BotCallback::FeedTarantula;
+use crate::bot::callbacks::BotCallback::MainMenu;
+use crate::bot::callbacks::BotCallback::MoltSimple;
 use crate::bot::commands::Command;
+use crate::bot::keyboards::{
+    feed_command_keyboard, feed_count_selection_keyboard, welcome_keyboard,
+};
 use crate::bot::notifications::NotificationSystem;
 use crate::db::db::TarantulaDB;
-use crate::error::TarantulaError;
+use crate::error::BotError;
+use crate::models::cricket::ColonyStatus;
+use crate::models::enums::HealthStatus;
 use crate::models::feeding::FeedingEvent;
 use crate::models::models::DbDateTime;
-use crate::TarantulaResult;
+use crate::models::user::TelegramUser;
+use crate::BotResult;
 use chrono::{NaiveDateTime, Utc};
+use future::BoxFuture;
+use futures_core::future;
 use std::env;
+use std::fmt::Debug;
 use std::sync::Arc;
-use teloxide::dispatching::{Dispatcher, UpdateFilterExt};
-use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude::{CallbackQuery, ChatId, Message, Requester, Update};
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
+use teloxide::dispatching::{Dispatcher, DpHandlerDescription, UpdateFilterExt};
+use teloxide::dptree::Handler;
+use teloxide::error_handlers::ErrorHandler;
+use teloxide::payloads::{
+    EditMessageReplyMarkupInlineSetters, EditMessageReplyMarkupSetters, SendMessageSetters,
+};
+use teloxide::prelude::{CallbackQuery, ChatId, DependencyMap, Message, Requester, Update};
+use teloxide::types::{
+    InlineKeyboardButton, InlineKeyboardMarkup, KeyboardMarkup, MessageId, ParseMode,
+};
 use teloxide::utils::command::BotCommands;
-use teloxide::{dptree, filter_command, Bot};
-use crate::models::enums::HealthStatus;
+use teloxide::{dptree, filter_command, Bot, RequestError};
+use BotCallback::{FeedingSchedule, ListTarantulas, StatusOverview};
 
 #[derive(Clone)]
 pub struct TarantulaBot {
-    bot: Bot,
-    pub(crate) db: Arc<TarantulaDB>,
+    pub(crate) bot: Bot,
+    db: Arc<TarantulaDB>,
     notification_system: Arc<NotificationSystem>,
+}
+
+pub struct ChanErrHandler {
+    bot: Bot,
+}
+
+impl<E> ErrorHandler<E> for ChanErrHandler
+where
+    E: Debug + Sync + Send + 'static,
+{
+    fn handle_error(self: Arc<Self>, error: E) -> BoxFuture<'static, ()> {
+        let default_chat = env::var("DEFAULT_CHAT_ID").unwrap();
+        Box::pin(async move {
+            let _ = self
+                .bot
+                .send_message(default_chat, format!("{:?}", error))
+                .await
+                .inspect_err(|e| log::error!("error {} while processing {:?}", e, error));
+        })
+    }
 }
 
 impl TarantulaBot {
@@ -29,23 +71,6 @@ impl TarantulaBot {
         let db_path = env::var("DATABASE_PATH").unwrap_or_else(|_| "tarantulas.sqlite".to_string());
         let db = Arc::new(TarantulaDB::new(&db_path).expect("Failed to open database"));
         let notification_system = Arc::new(NotificationSystem::new(bot.clone(), db.clone()));
-        let notification_system_clone = notification_system.clone();
-
-        let chat_id = match env::var("DEFAULT_CHAT_ID") {
-            Ok(val) => Some(val.parse::<i64>().expect("Invalid chat ID")),
-            Err(e) => {
-                log::warn!("No default chat ID set: {}", e);
-                None
-            }
-        };
-        
-        if let Some(chat_id) = chat_id {
-            tokio::spawn(async move {
-                notification_system_clone
-                    .register_chat(ChatId(chat_id))
-                    .await;
-            });
-        }
 
         Self {
             bot,
@@ -55,139 +80,228 @@ impl TarantulaBot {
     }
 
     pub async fn run(self) {
-        let notification_system_clone = self.notification_system.clone();
-        tokio::spawn(async move {
-            let system = (*notification_system_clone).clone();
-            system.start().await;
-        });
-        let self_clone1 = self.clone();
-        let self_clone2 = self.clone();
-        let handler = dptree::entry()
-            .branch(
-                Update::filter_callback_query().endpoint(move |bot: Bot, q: CallbackQuery| {
-                    let this = self_clone2.clone();
-                    async move { this.handle_callback(bot, q).await }
-                }),
-            )
-            .branch(
-                Update::filter_message().branch(filter_command::<Command, _>().endpoint(
-                    move |bot: Bot, msg: Message, cmd: Command| {
-                        let this = self_clone1.clone();
-                        async move { this.handle_command(bot, msg, cmd).await }
-                    },
-                )),
-            );
+        let arc_notif_system = self.notification_system.clone();
+        tokio::spawn((*arc_notif_system).clone().start());
+        let handler = Self::build_handler();
 
-        Dispatcher::builder(self.bot, handler)
+        let mut container = DependencyMap::new();
+        let arc = Arc::new(self);
+        container.insert(arc.clone());
+
+        Dispatcher::builder((*arc).clone().bot, handler)
+            .dependencies(container)
+            .error_handler(Arc::new(ChanErrHandler {
+                bot: (*arc).clone().bot,
+            }))
             .enable_ctrlc_handler()
             .build()
             .dispatch()
             .await;
     }
 
-    pub(crate) async fn handle_feed_command(
+    fn build_handler() -> Handler<'static, DependencyMap, BotResult<()>, DpHandlerDescription> {
+        let handler = dptree::entry()
+            .branch(
+                Update::filter_callback_query().endpoint(move |a: Arc<TarantulaBot>, q: CallbackQuery| {
+                    async move { a.handle_callback(&a.clone(), q).await }
+                }),
+            )
+            .branch(
+                Update::filter_message().branch(filter_command::<Command, _>().endpoint(
+                    move |a: Arc<TarantulaBot>, msg: Message, cmd: Command| {
+                        async move { a.handle_command(msg, cmd).await }
+                    },
+                )),
+            ).branch(
+            Update::filter_message().endpoint(move |a: Arc<TarantulaBot>, msg: Message| {
+                async move {
+                    if let Some(text) = msg.text() {
+                        if text.starts_with('/') {
+                            let command = text.split_whitespace().next().unwrap_or(text);
+                            let help_message = format!(
+                                "Unknown command: {}\n\nAvailable commands:\n{}",
+                                command,
+                                Command::descriptions().to_string()
+                            );
+                            a.bot.send_message(msg.chat.id, help_message).await?;
+                        } else {
+                            a.bot.send_message(
+                                msg.chat.id,
+                                "I can only respond to commands. Type /help to see available commands.",
+                            ).await?;
+                        }
+                    }
+                    Ok(())
+                }
+            }),
+        );
+        handler
+    }
+
+    async fn handle_command(&self, msg: Message, cmd: Command) -> BotResult<()> {
+        let user = msg.from.unwrap();
+        let user = TelegramUser {
+            telegram_id: user.id.0,
+            username: user.username,
+            first_name: user.first_name,
+            last_name: user.last_name,
+        };
+        self.db.ensure_user_exists(&user).await?;
+
+        let result = match cmd {
+            Command::Help => {
+                self.bot
+                    .send_message(msg.chat.id, Command::descriptions().to_string())
+                    .await?;
+                Ok(())
+            }
+            Command::Start => {
+                self.notification_system
+                    .register_chat(user.telegram_id, msg.chat.id)
+                    .await;
+                self.send_welcome_message(msg.chat.id, user.telegram_id)
+                    .await
+            }
+            Command::AddTarantula(name, species, date, age_months, notes) => {
+                self.db
+                    .add_tarantula(
+                        user.telegram_id,
+                        &*name,
+                        species,
+                        &*date,
+                        age_months,
+                        None,
+                        match notes.as_str() {
+                            "-" => None,
+                            _ => Some(&*notes),
+                        },
+                    )
+                    .await?;
+                self.send_welcome_message(msg.chat.id, user.telegram_id)
+                    .await
+            }
+            Command::AddColony(colony_name, size_type_id, current_count, container_name, notes) => {
+                self.db
+                    .add_colony(
+                        user.telegram_id,
+                        &*colony_name,
+                        size_type_id,
+                        current_count,
+                        &*container_name,
+                        match notes.as_str() {
+                            "-" => None,
+                            _ => Some(&*notes),
+                        },
+                    )
+                    .await?;
+                self.send_welcome_message(msg.chat.id, user.telegram_id)
+                    .await
+            }
+        };
+
+        if let Err(e) = result {
+            self.handle_command_error(msg.chat.id, e).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_command_error(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
+        error: BotError,
+    ) -> Result<(), RequestError> {
+        let error_message = match error {
+            BotError::NotFound(msg) => format!("❌ {}", msg),
+            BotError::ValidationError(msg) => format!("⚠️ {}", msg),
+            BotError::Database(e) => {
+                log::error!("Database error: {:?}", e);
+                "❌ A database error occurred. Please try again later.".to_string()
+            }
+            BotError::Telegram(e) => {
+                log::error!("Telegram error: {:?}", e);
+                "❌ A communication error occurred. Please try again later.".to_string()
+            }
+            _ => {
+                log::error!("Unexpected error: {:?}", error);
+                "❌ An unexpected error occurred. Please try again later.".to_string()
+            }
+        };
+
+        let keyboard = Self::back_to_menu_keyboard();
+
+        self.reply_with_send(chat_id, error_message, Some(keyboard))
+            .await
+            .inspect_err(|e| log::error!("something went wrong {}", e))
+            .expect("TODO: panic message");
+        Ok(())
+    }
+
+    pub(crate) async fn feed_command(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
         tarantula_id: i64,
-    ) -> TarantulaResult<()> {
-        let tarantula = self.db.get_tarantula_by_id(tarantula_id).await?;
-        let colonies = self.db.get_colony_status().await?;
-
-        let mut keyboard: Vec<Vec<InlineKeyboardButton>> = colonies
-            .chunks(2)
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .map(|colony| {
-                        InlineKeyboardButton::callback(
-                            format!("{} ({})", colony.colony_name, colony.size_type.to_db_name()),
-                            format!("feed_select_colony_{}_{}", tarantula.id, colony.id),
-                        )
-                    })
-                    .collect()
-            })
-            .collect();
-
-        keyboard.push(vec![InlineKeyboardButton::callback(
-            "« Cancel",
-            "main_menu",
-        )]);
-
-        bot.send_message(
+        user_id: u64,
+    ) -> BotResult<()> {
+        let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
+        let colonies = self.db.get_colony_status(user_id).await?;
+        let keyboard = feed_command_keyboard(tarantula_id, colonies);
+        self.replay_with_edit(
             chat_id,
+            message_id,
             format!(
                 "Feeding *{}*\nSelect cricket colony to use:",
                 tarantula.name
             ),
+            InlineKeyboardMarkup::new(keyboard),
         )
-        .reply_markup(InlineKeyboardMarkup::new(keyboard))
-        .parse_mode(ParseMode::Html)
-        .await?;
-
-        Ok(())
+        .await
     }
-    pub(crate) async fn handle_feed_colony_selection(
+
+    pub(crate) async fn feed_colony_selection(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
+        message_id: MessageId,
         tarantula_id: i64,
         colony_id: i64,
-    ) -> TarantulaResult<()> {
+        user_id: u64,
+    ) -> BotResult<()> {
+        let colony = self.colony_status(colony_id, user_id).await?;
+        let keyboard = feed_count_selection_keyboard(tarantula_id, colony_id);
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            format!(
+                "Selected colony: {} ({})\nCurrent count: {}\nHow many crickets?",
+                colony.colony_name,
+                colony.size_type.to_db_name(),
+                colony.current_count
+            ),
+            keyboard,
+        )
+        .await
+    }
+
+    async fn colony_status(&self, colony_id: i64, user_id: u64) -> Result<ColonyStatus, BotError> {
         let colony = self
             .db
-            .get_colony_status()
+            .get_colony_status(user_id)
             .await?
             .into_iter()
             .find(|c| c.id == colony_id)
-            .ok_or_else(|| TarantulaError::NotFound("Colony not found".to_string()))?;
-
-        let keyboard = InlineKeyboardMarkup::new(vec![
-            vec![
-                InlineKeyboardButton::callback(
-                    "1 cricket",
-                    format!("feed_confirm_{}_{}_{}", tarantula_id, colony_id, 1),
-                ),
-                InlineKeyboardButton::callback(
-                    "2 crickets",
-                    format!("feed_confirm_{}_{}_{}", tarantula_id, colony_id, 2),
-                ),
-            ],
-            vec![
-                InlineKeyboardButton::callback(
-                    "3 crickets",
-                    format!("feed_confirm_{}_{}_{}", tarantula_id, colony_id, 3),
-                ),
-                InlineKeyboardButton::callback(
-                    "5 crickets",
-                    format!("feed_confirm_{}_{}_{}", tarantula_id, colony_id, 5),
-                ),
-            ],
-            vec![InlineKeyboardButton::callback("« Cancel", "main_menu")],
-        ]);
-
-        bot.send_message(
-            chat_id,
-            format!(
-                "Selected colony: {} ({})\nCurrent count: {}\nHow many crickets?",
-                colony.colony_name, colony.size_type.to_db_name(), colony.current_count
-            ),
-        )
-        .reply_markup(keyboard)
-        .parse_mode(ParseMode::Html)
-        .await?;
-
-        Ok(())
+            .ok_or_else(|| BotError::NotFound("Colony not found".to_string()))?;
+        Ok(colony)
     }
 
-    pub(crate) async fn handle_feed_confirmation(
+    pub(crate) async fn feed_confirmation(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
+        message_id: MessageId,
         tarantula_id: i64,
         colony_id: i64,
         count: i32,
-    ) -> TarantulaResult<()> {
+        user_id: u64,
+    ) -> BotResult<()> {
         let feeding_event = FeedingEvent {
             id: None,
             tarantula_id,
@@ -198,74 +312,29 @@ impl TarantulaBot {
             notes: None,
         };
 
-        self.db.record_feeding(&feeding_event).await?;
+        self.db.record_feeding(user_id, &feeding_event).await?;
 
-        bot.send_message(chat_id, format!("✅ Feeding recorded: {} crickets", count))
-            .reply_markup(InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("« Back to Menu", "main_menu"),
-            ]]))
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
-    }
-
-    async fn handle_command(&self, bot: Bot, msg: Message, cmd: Command) -> TarantulaResult<()> {
-        let result = match cmd {
-            Command::Help => {
-                bot.send_message(msg.chat.id, Command::descriptions().to_string())
-                    .await?;
-                Ok(())
-            }
-            Command::Start => {
-                self.notification_system.register_chat(msg.chat.id).await;
-                self.send_welcome_message(&bot, msg.chat.id).await
-            }
-        };
-
-        if let Err(e) = result {
-            self.handle_error(&bot, msg.chat.id, e).await?;
-        }
-        Ok(())
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            format!("✅ Feeding recorded: {} crickets", count),
+            Self::back_to_menu_keyboard(),
+        )
+        .await
     }
 
     pub(crate) async fn send_welcome_message(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let keyboard = InlineKeyboardMarkup::new(vec![
-            vec![
-                InlineKeyboardButton::callback("🕷 List Tarantulas", "list_tarantulas"),
-                InlineKeyboardButton::callback("📊 Status Overview", "status_overview"),
-            ],
-            vec![
-                InlineKeyboardButton::callback("🍽 Due Feedings", "feeding_schedule"),
-                InlineKeyboardButton::callback("📝 Record Feeding", "record_feeding"),
-            ],
-            vec![
-                InlineKeyboardButton::callback("🏥 Health Alerts", "health_alerts"),
-                InlineKeyboardButton::callback("🔍 Record Health Check", "record_health_check"),
-            ],
-            vec![
-                InlineKeyboardButton::callback("🐾 Recent Molts", "molt_history"),
-                InlineKeyboardButton::callback("📝 Record Molt", "record_molt"),
-            ],
-            vec![
-                InlineKeyboardButton::callback("🦗 Colony Status", "colonies"),
-                InlineKeyboardButton::callback("🧰 Colony Maintenance", "colony_maintenance"),
-            ],
-            vec![
-                InlineKeyboardButton::callback("🧹 Maintenance Tasks", "maintenance"),
-                InlineKeyboardButton::callback("📋 View Records", "view_records"),
-            ],
-        ]);
-        let feeding_due = self.db.get_tarantulas_due_feeding().await?;
-        let health_alerts = self.db.get_health_alerts().await?;
+        user_id: u64,
+    ) -> BotResult<()> {
+        let keyboard = welcome_keyboard();
+        let feeding_due = self.db.get_tarantulas_due_feeding(user_id).await?;
+        let health_alerts = self.db.get_health_alerts(user_id).await?;
 
         let recent_molts = self
             .db
-            .get_recent_molt_records(100)
+            .get_recent_molt_records(user_id, 100)
             .await?
             .into_iter()
             .filter(|r| {
@@ -288,55 +357,16 @@ impl TarantulaBot {
             health_alerts.len(),
             recent_molts
         );
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.reply_with_send(chat_id, message, Some(keyboard)).await
     }
 
-    pub(crate) async fn handle_error(
+    pub(crate) async fn list_tarantulas(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-        error: TarantulaError,
-    ) -> Result<(), teloxide::RequestError> {
-        let error_message = match error {
-            TarantulaError::NotFound(msg) => format!("❌ {}", msg),
-            TarantulaError::ValidationError(msg) => format!("⚠️ {}", msg),
-            TarantulaError::Database(e) => {
-                log::error!("Database error: {:?}", e);
-                "❌ A database error occurred. Please try again later.".to_string()
-            }
-            TarantulaError::Telegram(e) => {
-                log::error!("Telegram error: {:?}", e);
-                "❌ A communication error occurred. Please try again later.".to_string()
-            }
-            _ => {
-                log::error!("Unexpected error: {:?}", error);
-                "❌ An unexpected error occurred. Please try again later.".to_string()
-            }
-        };
-
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
-
-        bot.send_message(chat_id, error_message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
-    }
-    pub(crate) async fn handle_list_tarantulas(
-        &self,
-        bot: &Bot,
-        chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let tarantulas = self.db.get_all_tarantulas().await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let tarantulas = self.db.get_all_tarantulas(user_id).await?;
         let mut message = String::from("🕷 *Your Tarantulas*\n\n");
 
         if tarantulas.is_empty() {
@@ -358,25 +388,39 @@ impl TarantulaBot {
             ));
         }
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_feeding_schedule(
+    async fn replay_with_edit(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let due_feedings = self.db.get_tarantulas_due_feeding().await?;
+        message_id: MessageId,
+        message: String,
+        keyboard: InlineKeyboardMarkup,
+    ) -> BotResult<()> {
+        self.bot
+            .edit_message_text(chat_id, message_id, message)
+            .await
+            .map(|_| ())?;
+
+        self.bot
+            .edit_message_reply_markup(chat_id, message_id)
+            .reply_markup(keyboard)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.into())
+    }
+
+    pub(crate) async fn feeding_schedule(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let due_feedings = self.db.get_tarantulas_due_feeding(user_id).await?;
 
         let mut message = String::from("🍽 *Feeding Schedule*\n\n");
         for t in &due_feedings {
@@ -391,25 +435,19 @@ impl TarantulaBot {
             message = String::from("No feedings currently due! 🎉");
         }
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_health_alerts(
+    pub(crate) async fn health_alerts(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let alerts = self.db.get_health_alerts().await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let alerts = self.db.get_health_alerts(user_id).await?;
 
         let mut message = String::from("🏥 *Health Alerts*\n\n");
         for alert in &alerts {
@@ -423,25 +461,19 @@ impl TarantulaBot {
             message = String::from("No health alerts! All tarantulas appear healthy. 🎉");
         }
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_maintenance(
+    pub(crate) async fn maintenance(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let tasks = self.db.get_maintenance_tasks().await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let tasks = self.db.get_maintenance_tasks(user_id).await?;
 
         let mut message = String::from("🧹 *Maintenance Tasks*\n\n");
         for task in &tasks {
@@ -455,21 +487,19 @@ impl TarantulaBot {
             message = String::from("No maintenance tasks currently due! 🎉");
         }
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_colonies(&self, bot: &Bot, chat_id: ChatId) -> TarantulaResult<()> {
-        let colonies = self.db.get_colony_status().await?;
+    pub(crate) async fn colonies(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let colonies = self.db.get_colony_status(user_id).await?;
 
         let mut message = String::from("🦗 *Cricket Colonies*\n\n");
         for colony in &colonies {
@@ -487,150 +517,148 @@ impl TarantulaBot {
             message = String::from("No cricket colonies found in the database.");
         }
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_record_molt_command(
+    pub(crate) async fn record_molt_command(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
+        message_id: MessageId,
         tarantula_id: i64,
-    ) -> TarantulaResult<()> {
-        self.db.record_molt(tarantula_id, None, None, None).await?;
-
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
-        bot.send_message(chat_id, "Molt recorded \nThank you!".to_string())
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
+        user_id: u64,
+    ) -> BotResult<()> {
+        self.db
+            .record_molt(tarantula_id, None, None, None, user_id)
             .await?;
-        Ok(())
+
+        let keyboard = Self::back_to_menu_keyboard();
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            "Molt recorded \nThank you!".to_string(),
+            keyboard,
+        )
+        .await
     }
 
-    pub(crate) async fn handle_health_check_command(
+    pub(crate) async fn health_check_command(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
+        message_id: MessageId,
         tarantula_id: i64,
-    ) -> TarantulaResult<()> {
-        let tarantula = self.db.get_tarantula_by_id(tarantula_id).await?;
+        user_id: u64,
+    ) -> BotResult<()> {
+        let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![InlineKeyboardButton::callback(
                 "✅ Healthy",
-                format!("health_status_{}_{}", tarantula.id, 1),
+                BotCallback::HealthStatus(tarantula_id, 1).to_string(),
             )],
             vec![InlineKeyboardButton::callback(
                 "⚠️ Monitor",
-                format!("health_status_{}_{}", tarantula.id, 2),
+                BotCallback::HealthStatus(tarantula_id, 2).to_string(),
             )],
             vec![InlineKeyboardButton::callback(
                 "🚨 Critical",
-                format!("health_status_{}_{}", tarantula.id, 3),
+                BotCallback::HealthStatus(tarantula_id, 3).to_string(),
             )],
-            vec![InlineKeyboardButton::callback("« Cancel", "main_menu")],
+            vec![InlineKeyboardButton::callback(
+                "« Cancel",
+                MainMenu.to_string(),
+            )],
         ]);
 
-        bot.send_message(
+        self.replay_with_edit(
             chat_id,
+            message_id,
             format!(
                 "Health check for *{}*\nSelect current health status:",
                 tarantula.name
             ),
+            keyboard,
         )
-        .reply_markup(keyboard)
-        .parse_mode(ParseMode::Html)
-        .await?;
-
-        Ok(())
+        .await
     }
 
-    pub(crate) async fn handle_health_status_command(
+    pub(crate) async fn health_status_command(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
+        message_id: MessageId,
         tarantula_id: i64,
         health_status: HealthStatus,
-    ) -> TarantulaResult<()> {
+        user_id: u64,
+    ) -> BotResult<()> {
         self.db
-            .record_health_check(tarantula_id, health_status, None)
+            .record_health_check(user_id, tarantula_id, health_status, None)
             .await?;
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, "Health status recorded \nThank you!".to_string())
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            "Health status recorded \nThank you!".to_string(),
+            keyboard,
+        )
+        .await
+    }
+    pub(crate) async fn colony_maintenance_menu(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        colony_id: i64,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let colony = self.colony_status(colony_id, user_id).await?;
+        self.colony_maintenance_command(chat_id, message_id, &colony.colony_name, user_id)
+            .await
     }
 
-    pub(crate) async fn handle_colony_maintenance_command(
+    pub(crate) async fn colony_maintenance_command(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
+        message_id: MessageId,
         colony_name: &str,
-    ) -> TarantulaResult<()> {
-        let colonies = self.db.get_colony_status().await?;
+        user_id: u64,
+    ) -> BotResult<()> {
+        let colonies = self.db.get_colony_status(user_id).await?;
         let colony = colonies
             .iter()
             .find(|c| c.colony_name.eq_ignore_ascii_case(colony_name))
-            .ok_or_else(|| {
-                TarantulaError::NotFound(format!("Colony '{}' not found", colony_name))
-            })?;
+            .ok_or_else(|| BotError::NotFound(format!("Colony '{}' not found", colony_name)))?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![InlineKeyboardButton::callback(
                 "📝 Update Count",
-                format!("colony_count_{}", colony.id),
+                ColonyGetCount(colony.id).to_string(),
             )],
             vec![InlineKeyboardButton::callback(
-                "🥗 Record Feeding",
-                format!("colony_feed_{}", colony.id),
+                "« Cancel",
+                MainMenu.to_string(),
             )],
-            vec![InlineKeyboardButton::callback(
-                "🧹 Record Cleaning",
-                format!("colony_clean_{}", colony.id),
-            )],
-            vec![InlineKeyboardButton::callback("« Cancel", "main_menu")],
         ]);
 
-        bot.send_message(
+        self.replay_with_edit(
             chat_id,
+            message_id,
             format!(
                 "*Cricket Colony Maintenance*\n\nColony: {}\nCurrent count: {}\nSize: {}\n\nSelect maintenance action:",
                 colony.colony_name, colony.current_count, colony.size_type.to_db_name()
-            ),
-        )
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+            ), keyboard)
+            .await
     }
-    pub(crate) async fn handle_status_overview(
+    pub(crate) async fn status_overview(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let due_feedings = self.db.get_tarantulas_due_feeding().await?;
-        let health_alerts = self.db.get_health_alerts().await?;
-        let colonies = self.db.get_colony_status().await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let due_feedings = self.db.get_tarantulas_due_feeding(user_id).await?;
+        let health_alerts = self.db.get_health_alerts(user_id).await?;
+        let colonies = self.db.get_colony_status(user_id).await?;
 
         let message = format!(
             "*System Overview*\n\n\
@@ -660,27 +688,21 @@ impl TarantulaBot {
             0 // TODO: Implement maintenance task count
         );
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_record_feeding_menu(
+    pub(crate) async fn record_feeding_menu(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let tarantulas = self.db.get_all_tarantulas().await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let tarantulas = self.db.get_all_tarantulas(user_id).await?;
 
-        let mut keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
+        let keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
             .chunks(2)
             .map(|chunk| {
                 chunk
@@ -688,34 +710,33 @@ impl TarantulaBot {
                     .map(|t| {
                         InlineKeyboardButton::callback(
                             format!("{} ({})", t.name, t.species_name),
-                            format!("feed_tarantula_{}", t.id),
+                            FeedTarantula(t.id).to_string(),
                         )
                     })
                     .collect()
             })
             .collect();
+        let keyboard = Self::with_back_button(keyboard);
 
-        keyboard.push(vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]);
-
-        bot.send_message(chat_id, "*Record Feeding*\n\nSelect a tarantula:")
-            .reply_markup(InlineKeyboardMarkup::new(keyboard))
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        let msg = "*Record Feeding*\n\nSelect a tarantula:";
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            msg.to_string(),
+            InlineKeyboardMarkup::new(keyboard),
+        )
+        .await
     }
 
-    pub(crate) async fn handle_record_health_check_menu(
+    pub(crate) async fn record_health_check_menu(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let tarantulas = self.db.get_all_tarantulas().await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let tarantulas = self.db.get_all_tarantulas(user_id).await?;
 
-        let mut keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
+        let keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
             .chunks(2)
             .map(|chunk| {
                 chunk
@@ -723,80 +744,69 @@ impl TarantulaBot {
                     .map(|t| {
                         InlineKeyboardButton::callback(
                             format!("{} ({})", t.name, t.species_name),
-                            format!("health_check_{}", t.id),
+                            BotCallback::HealthCheck(t.id).to_string(),
                         )
                     })
                     .collect()
             })
             .collect();
+        let keyboard = Self::with_back_button(keyboard);
 
-        keyboard.push(vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]);
-
-        bot.send_message(chat_id, "*Health Check*\n\nSelect a tarantula:")
-            .reply_markup(InlineKeyboardMarkup::new(keyboard))
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            "*Health Check*\n\nSelect a tarantula:".to_string(),
+            InlineKeyboardMarkup::new(keyboard),
+        )
+        .await
     }
 
-    pub(crate) async fn handle_molt_history(
+    pub(crate) async fn molt_history(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
         // TODO: Add database method to fetch molt history
         let message = "Recent molt history will be displayed here.";
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message.to_string(), keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_view_records(
+    pub(crate) async fn view_records(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
+        message_id: MessageId,
+    ) -> BotResult<()> {
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![
                 InlineKeyboardButton::callback("Feeding Records", "view_feeding_records"),
                 InlineKeyboardButton::callback("Health Records", "view_health_records"),
             ],
-            vec![
-                InlineKeyboardButton::callback("Molt Records", "view_molt_records"),
-                InlineKeyboardButton::callback("Colony Records", "view_colony_records"),
-            ],
+            vec![InlineKeyboardButton::callback(
+                "Molt Records",
+                "view_molt_records",
+            )],
             vec![InlineKeyboardButton::callback(
                 "« Back to Menu",
-                "main_menu",
+                MainMenu.to_string(),
             )],
         ]);
 
-        bot.send_message(chat_id, "*View Records*\n\nSelect record type:")
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        let msg = "*View Records*\n\nSelect record type:";
+        self.replay_with_edit(chat_id, message_id, msg.to_string(), keyboard)
+            .await
     }
-    pub(crate) async fn handle_feeding_records(
+    pub(crate) async fn view_feeding_records(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_feeding_records(10).await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let records = self.db.get_recent_feeding_records(user_id, 10).await?;
 
         let mut message = String::from("🍽 *Recent Feeding Records*\n\n");
         if records.is_empty() {
@@ -820,20 +830,17 @@ impl TarantulaBot {
             "view_records",
         )]]);
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_health_records(
+    pub(crate) async fn view_health_records(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_health_records(10).await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let records = self.db.get_recent_health_records(user_id, 10).await?;
 
         let mut message = String::from("🏥 *Recent Health Check Records*\n\n");
         if records.is_empty() {
@@ -867,20 +874,17 @@ impl TarantulaBot {
             "view_records",
         )]]);
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_molt_records(
+    pub(crate) async fn view_molt_records(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_molt_records(10).await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let records = self.db.get_recent_molt_records(user_id, 10).await?;
 
         let mut message = String::from("🐾 *Recent Molt Records*\n\n");
         if records.is_empty() {
@@ -908,71 +912,181 @@ impl TarantulaBot {
             "view_records",
         )]]);
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
-
-        Ok(())
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
-    pub(crate) async fn handle_colony_records(
+    pub(crate) async fn record_molt_menu(
         &self,
-        bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_colony_records(10).await?;
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let tarantulas = self.db.get_all_tarantulas(user_id).await?;
+        let mut keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
+            .chunks(2)
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|t| {
+                        InlineKeyboardButton::callback(
+                            format!("{} ({})", t.name, t.species_name),
+                            MoltSimple(t.id).to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        keyboard.push(vec![InlineKeyboardButton::callback(
+            "« Back to Menu",
+            MainMenu.to_string(),
+        )]);
 
-        let mut message = String::from("🦗 *Recent Colony Maintenance Records*\n\n");
-        if records.is_empty() {
-            message.push_str("No colony maintenance records found.");
-        } else {
-            for record in records {
-                let actions = vec![
-                    if record.food_added {
-                        Some("Food added")
-                    } else {
-                        None
-                    },
-                    if record.water_added {
-                        Some("Water added")
-                    } else {
-                        None
-                    },
-                    if record.cleaning_performed {
-                        Some("Cleaned")
-                    } else {
-                        None
-                    },
-                ];
-                let actions_str = actions.into_iter().flatten().collect::<Vec<_>>().join(", ");
+        let msg = "*Record Molt*\n\nSelect a tarantula:";
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            msg.to_string(),
+            InlineKeyboardMarkup::new(keyboard),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.into())
+    }
 
-                message.push_str(&format!(
-                    "*{}* - {}\n• Count: {} → {}\n• Actions: {}\n{}\n\n",
-                    record.colony_name,
-                    record.maintenance_date,
-                    record.previous_count,
-                    record.new_count,
-                    if actions_str.is_empty() {
-                        "None"
-                    } else {
-                        &actions_str
-                    },
-                    record.notes.unwrap_or_default()
-                ));
-            }
-        }
+    pub(crate) async fn colony_maintenance(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let colonies = self.db.get_colony_status(user_id).await?;
+        let mut keyboard: Vec<Vec<InlineKeyboardButton>> = colonies
+            .chunks(2)
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|c| {
+                        InlineKeyboardButton::callback(
+                            format!("{} ({})", c.colony_name, c.size_type.to_db_name()),
+                            ColonyMaintenanceMenu(c.id).to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        keyboard.push(vec![InlineKeyboardButton::callback(
+            "« Back to Menu",
+            MainMenu.to_string(),
+        )]);
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Records",
-            "view_records",
-        )]]);
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            "*Colony Maintenance*\n\nSelect a colony:".to_string(),
+            InlineKeyboardMarkup::new(keyboard),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.into())
+    }
 
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
+    pub(crate) async fn colony_count(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        colony_id: i64,
+        user_id: u64,
+    ) -> BotResult<()> {
+        let colony = self.colony_status(colony_id, user_id).await?;
+
+        let keyboard = InlineKeyboardMarkup::new(vec![
+            vec![
+                InlineKeyboardButton::callback(
+                    "-10",
+                    ColonyCountUpdate(colony_id, -10).to_string(),
+                ),
+                InlineKeyboardButton::callback("-5", ColonyCountUpdate(colony_id, -5).to_string()),
+            ],
+            vec![
+                InlineKeyboardButton::callback("+1", ColonyCountUpdate(colony_id, 1).to_string()),
+                InlineKeyboardButton::callback("+5", ColonyCountUpdate(colony_id, 5).to_string()),
+                InlineKeyboardButton::callback("+10", ColonyCountUpdate(colony_id, 10).to_string()),
+                InlineKeyboardButton::callback("+50", ColonyCountUpdate(colony_id, 50).to_string()),
+            ],
+            vec![InlineKeyboardButton::callback(
+                "« Cancel",
+                MainMenu.to_string(),
+            )],
+        ]);
+
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            format!(
+                "*Update Colony Count*\n\nColony: {}\nCurrent count: {}\nSelect adjustment:",
+                colony.colony_name, colony.current_count
+            ),
+            keyboard,
+        )
+        .await
+    }
+
+    pub(crate) async fn colony_count_update(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        colony_id: i64,
+        adjustment: i32,
+        user_id: u64,
+    ) -> BotResult<()> {
+        self.db
+            .update_colony_count(colony_id, adjustment, user_id)
             .await?;
 
-        Ok(())
+        let keyboard = Self::back_to_menu_keyboard();
+
+        self.replay_with_edit(
+            chat_id,
+            message_id,
+            format!("✅ Colony count updated by {}", adjustment),
+            keyboard,
+        )
+        .await
+    }
+
+    async fn reply_with_send(
+        &self,
+        chat_id: ChatId,
+        message: String,
+        keyboard_markup: Option<InlineKeyboardMarkup>,
+    ) -> BotResult<()> {
+        let mut request = self
+            .bot
+            .send_message(chat_id, message)
+            .parse_mode(ParseMode::Html);
+
+        if let Some(k) = keyboard_markup {
+            request = request.reply_markup(k)
+        }
+
+        request.await.map(|_| ()).map_err(|e| e.into())
+    }
+
+    fn back_to_menu_keyboard() -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+            "« Back to Menu",
+            MainMenu.to_string(),
+        )]])
+    }
+
+    fn with_back_button(
+        mut keyboard: Vec<Vec<InlineKeyboardButton>>,
+    ) -> Vec<Vec<InlineKeyboardButton>> {
+        keyboard.push(vec![InlineKeyboardButton::callback(
+            "« Back to Menu",
+            MainMenu.to_string(),
+        )]);
+        keyboard
     }
 }
