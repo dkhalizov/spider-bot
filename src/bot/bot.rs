@@ -26,7 +26,8 @@ pub struct TarantulaBot {
 impl TarantulaBot {
     pub fn new(token: &str) -> Self {
         let bot = Bot::new(token);
-        let db = Arc::new(TarantulaDB::new("tarantulas.sqlite").expect("Failed to open database"));
+        let db_path = env::var("DATABASE_PATH").unwrap_or_else(|_| "tarantulas.sqlite".to_string());
+        let db = Arc::new(TarantulaDB::new(&db_path).expect("Failed to open database"));
         let notification_system = Arc::new(NotificationSystem::new(bot.clone(), db.clone()));
         let notification_system_clone = notification_system.clone();
 
