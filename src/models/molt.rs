@@ -1,11 +1,11 @@
-
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
-struct MoltRecord {
-    tarantula_name: String,
-    molt_date: String,
-    stage: String,
-    pre_molt_length_cm: Option<f32>,
-    complications: Option<String>,
-    notes: Option<String>,
+pub struct MoltRecord {
+    pub tarantula_name: String,
+    pub molt_date: String,
+    pub stage: String,
+    pub pre_molt_length_cm: Option<f32>,
+    pub complications: Option<String>,
+    pub notes: Option<String>,
 }

@@ -1,16 +1,17 @@
-mod models;
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Tarantula {
-    pub id: Option<i64>,
+    pub id: i64,
     pub name: String,
     pub species_id: i64,
-    pub acquisition_date: DbDateTime,
-    pub last_molt_date: Option<DbDateTime>,
+    pub acquisition_date: NaiveDate,
+    pub last_molt_date: Option<NaiveDate>,
     pub estimated_age_months: Option<i32>,
     pub current_molt_stage_id: Option<i64>,
     pub current_health_status_id: Option<i64>,
-    pub last_health_check_date: Option<DbDateTime>,
+    pub last_health_check_date: Option<NaiveDate>,
     pub enclosure_number: Option<String>,
     pub notes: Option<String>,
 }

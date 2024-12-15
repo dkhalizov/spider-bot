@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 #[derive(Debug, Serialize)]
 pub struct HealthAlert {
     pub id: i64,
@@ -7,12 +9,12 @@ pub struct HealthAlert {
     pub days_in_state: i32,
 }
 #[derive(Debug, Serialize)]
-struct HealthRecord {
-    tarantula_name: String,
-    check_date: String,
-    status: String,
-    weight_grams: Option<f32>,
-    humidity_percent: Option<i32>,
-    temperature_celsius: Option<f32>,
-    notes: Option<String>,
+pub struct HealthRecord {
+    pub tarantula_name: String,
+    pub check_date: String,
+    pub status: String,
+    pub weight_grams: Option<f32>,
+    pub humidity_percent: Option<i32>,
+    pub temperature_celsius: Option<f32>,
+    pub notes: Option<String>,
 }

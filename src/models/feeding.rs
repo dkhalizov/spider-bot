@@ -1,3 +1,6 @@
+use crate::models::models::DbDateTime;
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FeedingEvent {
     pub id: Option<i64>,
@@ -9,13 +12,12 @@ pub struct FeedingEvent {
     pub notes: Option<String>,
 }
 
-
 #[derive(Debug, Serialize)]
-struct FeedingRecord {
-    tarantula_name: String,
-    feeding_date: String,
-    colony_name: String,
-    number_of_crickets: i32,
-    status: String,
-    notes: Option<String>,
+pub struct FeedingRecord {
+    pub tarantula_name: String,
+    pub feeding_date: String,
+    pub colony_name: String,
+    pub number_of_crickets: i32,
+    pub status: String,
+    pub notes: Option<String>,
 }
