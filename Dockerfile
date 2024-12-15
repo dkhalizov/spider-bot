@@ -17,4 +17,4 @@ WORKDIR /app
 
 COPY --from=builder /usr/src/app/target/release/spider-bot /app/spider-bot
 
-CMD ["./spider-bot"]
+ENTRYPOINT ["/app/spider-bot"]
