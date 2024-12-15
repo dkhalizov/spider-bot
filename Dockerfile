@@ -12,7 +12,7 @@ COPY src ./src
 
 RUN cargo build --release
 
-FROM scratch AS runtime
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
 COPY --from=builder /usr/src/app/target/release/spider-bot /app/spider-bot
