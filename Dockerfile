@@ -1,4 +1,4 @@
-FROM rust:1.83-slim as builder
+FROM rust:1.83-slim AS builder
 
 WORKDIR /usr/src/app
 
@@ -12,13 +12,8 @@ COPY src ./src
 
 RUN cargo build --release
 
-FROM debian:bookworm-slim
-
+FROM scratch AS runtime
 WORKDIR /app
-
-RUN apt-get update && \
-    apt-get install -y ca-certificates libssl1.1 && \
-    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/src/app/target/release/spider-bot /app/spider-bot
 
