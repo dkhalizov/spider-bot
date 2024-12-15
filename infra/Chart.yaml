@@ -1,0 +1,5 @@
+apiVersion: v2
+name: spider-bot
+description: A Helm chart for Tarantula Bot
+version: 0.1.0
+type: application

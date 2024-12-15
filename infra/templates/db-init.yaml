@@ -1,0 +1,74 @@
+# infra/templates/db-init.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init-script
+  namespace: spider-bot
+data:
+  init.sql: |
+{{- $files := .Files.Glob "sql/*.sql" }}
+{{- if $files }}
+{{- range $files }}
+{{ $.Files.Get . | indent 4 }}
+{{- end }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sqlite-data
+  namespace: spider-bot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: spider-bot
+spec:
+  template:
+    spec:
+      containers:
+        - name: sqlite-init
+          image: alpine:3.19
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Starting database initialization..."
+
+              echo "Installing SQLite..."
+              apk add --no-cache sqlite
+
+              echo "Running initialization script..."
+              cd /data
+              sqlite3 tarantulas.sqlite < /scripts/init.sql
+
+              echo "Setting file permissions..."
+              chown 1000:1000 tarantulas.sqlite
+              chmod 644 tarantulas.sqlite
+
+              echo "Verifying database tables..."
+              echo ".tables" | sqlite3 tarantulas.sqlite
+
+              echo "Database initialization completed!"
+          volumeMounts:
+            - name: sqlite-data
+              mountPath: /data
+            - name: init-script
+              mountPath: /scripts
+      restartPolicy: Never
+      volumes:
+        - name: sqlite-data
+          persistentVolumeClaim:
+            claimName: sqlite-data
+        - name: init-script
+          configMap:
+            name: db-init-script
+  backoffLimit: 1
