@@ -60,7 +60,29 @@ impl TarantulaBot {
                         async move { this.handle_command(bot, msg, cmd).await }
                     },
                 )),
-            );
+            ).branch(
+            Update::filter_message().endpoint(move |bot: Bot, msg: Message| {
+                async move {
+                    if let Some(text) = msg.text() {
+                        if text.starts_with('/') {
+                            let command = text.split_whitespace().next().unwrap_or(text);
+                            let help_message = format!(
+                                "Unknown command: {}\n\nAvailable commands:\n{}",
+                                command,
+                                Command::descriptions().to_string()
+                            );
+                            bot.send_message(msg.chat.id, help_message).await?;
+                        } else {
+                            bot.send_message(
+                                msg.chat.id,
+                                "I can only respond to commands. Type /help to see available commands."
+                            ).await?;
+                        }
+                    }
+                    Ok(())
+                }
+            }),
+        );
 
         Dispatcher::builder(self.bot, handler)
             .enable_ctrlc_handler()
