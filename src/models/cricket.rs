@@ -12,7 +12,7 @@ pub struct CricketColony {
     pub container_number: String,
     pub notes: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ColonyStatus {
     pub id: i64,
     pub colony_name: String,

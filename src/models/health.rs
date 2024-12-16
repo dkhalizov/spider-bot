@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize,Clone)]
 pub struct HealthAlert {
     pub id: i64,
     pub name: String,

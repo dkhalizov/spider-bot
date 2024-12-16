@@ -2,8 +2,10 @@ use crate::bot::commands::Command;
 use crate::bot::notifications::NotificationSystem;
 use crate::db::db::TarantulaDB;
 use crate::error::TarantulaError;
+use crate::models::enums::HealthStatus;
 use crate::models::feeding::FeedingEvent;
 use crate::models::models::DbDateTime;
+use crate::models::user::TelegramUser;
 use crate::TarantulaResult;
 use chrono::{NaiveDateTime, Utc};
 use std::env;
@@ -14,7 +16,6 @@ use teloxide::prelude::{CallbackQuery, ChatId, Message, Requester, Update};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 use teloxide::utils::command::BotCommands;
 use teloxide::{dptree, filter_command, Bot};
-use crate::models::enums::HealthStatus;
 
 #[derive(Clone)]
 pub struct TarantulaBot {
@@ -29,23 +30,6 @@ impl TarantulaBot {
         let db_path = env::var("DATABASE_PATH").unwrap_or_else(|_| "tarantulas.sqlite".to_string());
         let db = Arc::new(TarantulaDB::new(&db_path).expect("Failed to open database"));
         let notification_system = Arc::new(NotificationSystem::new(bot.clone(), db.clone()));
-        let notification_system_clone = notification_system.clone();
-
-        let chat_id = match env::var("DEFAULT_CHAT_ID") {
-            Ok(val) => Some(val.parse::<i64>().expect("Invalid chat ID")),
-            Err(e) => {
-                log::warn!("No default chat ID set: {}", e);
-                None
-            }
-        };
-        
-        if let Some(chat_id) = chat_id {
-            tokio::spawn(async move {
-                notification_system_clone
-                    .register_chat(ChatId(chat_id))
-                    .await;
-            });
-        }
 
         Self {
             bot,
@@ -90,9 +74,10 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         tarantula_id: i64,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let tarantula = self.db.get_tarantula_by_id(tarantula_id).await?;
-        let colonies = self.db.get_colony_status().await?;
+        let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
+        let colonies = self.db.get_colony_status(user_id).await?;
 
         let mut keyboard: Vec<Vec<InlineKeyboardButton>> = colonies
             .chunks(2)
@@ -133,10 +118,11 @@ impl TarantulaBot {
         chat_id: ChatId,
         tarantula_id: i64,
         colony_id: i64,
+        user_id: u64,
     ) -> TarantulaResult<()> {
         let colony = self
             .db
-            .get_colony_status()
+            .get_colony_status(user_id)
             .await?
             .into_iter()
             .find(|c| c.id == colony_id)
@@ -170,7 +156,9 @@ impl TarantulaBot {
             chat_id,
             format!(
                 "Selected colony: {} ({})\nCurrent count: {}\nHow many crickets?",
-                colony.colony_name, colony.size_type.to_db_name(), colony.current_count
+                colony.colony_name,
+                colony.size_type.to_db_name(),
+                colony.current_count
             ),
         )
         .reply_markup(keyboard)
@@ -187,6 +175,7 @@ impl TarantulaBot {
         tarantula_id: i64,
         colony_id: i64,
         count: i32,
+        user_id: u64,
     ) -> TarantulaResult<()> {
         let feeding_event = FeedingEvent {
             id: None,
@@ -198,7 +187,7 @@ impl TarantulaBot {
             notes: None,
         };
 
-        self.db.record_feeding(&feeding_event).await?;
+        self.db.record_feeding(user_id, &feeding_event).await?;
 
         bot.send_message(chat_id, format!("✅ Feeding recorded: {} crickets", count))
             .reply_markup(InlineKeyboardMarkup::new(vec![vec![
@@ -211,6 +200,15 @@ impl TarantulaBot {
     }
 
     async fn handle_command(&self, bot: Bot, msg: Message, cmd: Command) -> TarantulaResult<()> {
+        let user = msg.from.unwrap();
+        let user = TelegramUser {
+            telegram_id: user.id.0,
+            username: user.username,
+            first_name: user.first_name,
+            last_name: user.last_name,
+        };
+        self.db.ensure_user_exists(&user).await?;
+
         let result = match cmd {
             Command::Help => {
                 bot.send_message(msg.chat.id, Command::descriptions().to_string())
@@ -218,8 +216,46 @@ impl TarantulaBot {
                 Ok(())
             }
             Command::Start => {
-                self.notification_system.register_chat(msg.chat.id).await;
-                self.send_welcome_message(&bot, msg.chat.id).await
+                self.notification_system
+                    .register_chat(user.telegram_id, msg.chat.id)
+                    .await;
+                self.send_welcome_message(&bot, msg.chat.id, user.telegram_id)
+                    .await
+            }
+            Command::AddTarantula(name, species, date, age_months, notes) => {
+                self.db
+                    .add_tarantula(
+                        user.telegram_id,
+                        &*name,
+                        species,
+                        &*date,
+                        age_months,
+                        None,
+                        match notes.as_str() {
+                            "-" => None,
+                            _ => Some(&*notes),
+                        },
+                    )
+                    .await?;
+                self.send_welcome_message(&bot, msg.chat.id, user.telegram_id)
+                    .await
+            }
+            Command::AddColony(colony_name, size_type_id, current_count, container_name, notes) => {
+                self.db
+                    .add_colony(
+                        user.telegram_id,
+                        &*colony_name,
+                        size_type_id,
+                        current_count,
+                        &*container_name,
+                        match notes.as_str() {
+                            "-" => None,
+                            _ => Some(&*notes),
+                        },
+                    )
+                    .await?;
+                self.send_welcome_message(&bot, msg.chat.id, user.telegram_id)
+                    .await
             }
         };
 
@@ -233,6 +269,7 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![
@@ -260,12 +297,12 @@ impl TarantulaBot {
                 InlineKeyboardButton::callback("📋 View Records", "view_records"),
             ],
         ]);
-        let feeding_due = self.db.get_tarantulas_due_feeding().await?;
-        let health_alerts = self.db.get_health_alerts().await?;
+        let feeding_due = self.db.get_tarantulas_due_feeding(user_id).await?;
+        let health_alerts = self.db.get_health_alerts(user_id).await?;
 
         let recent_molts = self
             .db
-            .get_recent_molt_records(100)
+            .get_recent_molt_records(user_id, 100)
             .await?
             .into_iter()
             .filter(|r| {
@@ -335,8 +372,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let tarantulas = self.db.get_all_tarantulas().await?;
+        let tarantulas = self.db.get_all_tarantulas(user_id).await?;
         let mut message = String::from("🕷 *Your Tarantulas*\n\n");
 
         if tarantulas.is_empty() {
@@ -375,8 +413,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let due_feedings = self.db.get_tarantulas_due_feeding().await?;
+        let due_feedings = self.db.get_tarantulas_due_feeding(user_id).await?;
 
         let mut message = String::from("🍽 *Feeding Schedule*\n\n");
         for t in &due_feedings {
@@ -408,8 +447,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let alerts = self.db.get_health_alerts().await?;
+        let alerts = self.db.get_health_alerts(user_id).await?;
 
         let mut message = String::from("🏥 *Health Alerts*\n\n");
         for alert in &alerts {
@@ -440,8 +480,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let tasks = self.db.get_maintenance_tasks().await?;
+        let tasks = self.db.get_maintenance_tasks(user_id).await?;
 
         let mut message = String::from("🧹 *Maintenance Tasks*\n\n");
         for task in &tasks {
@@ -468,8 +509,13 @@ impl TarantulaBot {
         Ok(())
     }
 
-    pub(crate) async fn handle_colonies(&self, bot: &Bot, chat_id: ChatId) -> TarantulaResult<()> {
-        let colonies = self.db.get_colony_status().await?;
+    pub(crate) async fn handle_colonies(
+        &self,
+        bot: &Bot,
+        chat_id: ChatId,
+        user_id: u64,
+    ) -> TarantulaResult<()> {
+        let colonies = self.db.get_colony_status(user_id).await?;
 
         let mut message = String::from("🦗 *Cricket Colonies*\n\n");
         for colony in &colonies {
@@ -505,8 +551,11 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         tarantula_id: i64,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        self.db.record_molt(tarantula_id, None, None, None).await?;
+        self.db
+            .record_molt(tarantula_id, None, None, None, user_id)
+            .await?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
             "« Back to Menu",
@@ -524,8 +573,9 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         tarantula_id: i64,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let tarantula = self.db.get_tarantula_by_id(tarantula_id).await?;
+        let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![InlineKeyboardButton::callback(
@@ -563,9 +613,10 @@ impl TarantulaBot {
         chat_id: ChatId,
         tarantula_id: i64,
         health_status: HealthStatus,
+        user_id: u64,
     ) -> TarantulaResult<()> {
         self.db
-            .record_health_check(tarantula_id, health_status, None)
+            .record_health_check(user_id, tarantula_id, health_status, None)
             .await?;
         let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
             "« Back to Menu",
@@ -585,8 +636,9 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         colony_name: &str,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let colonies = self.db.get_colony_status().await?;
+        let colonies = self.db.get_colony_status(user_id).await?;
         let colony = colonies
             .iter()
             .find(|c| c.colony_name.eq_ignore_ascii_case(colony_name))
@@ -627,10 +679,11 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let due_feedings = self.db.get_tarantulas_due_feeding().await?;
-        let health_alerts = self.db.get_health_alerts().await?;
-        let colonies = self.db.get_colony_status().await?;
+        let due_feedings = self.db.get_tarantulas_due_feeding(user_id).await?;
+        let health_alerts = self.db.get_health_alerts(user_id).await?;
+        let colonies = self.db.get_colony_status(user_id).await?;
 
         let message = format!(
             "*System Overview*\n\n\
@@ -677,8 +730,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let tarantulas = self.db.get_all_tarantulas().await?;
+        let tarantulas = self.db.get_all_tarantulas(user_id).await?;
 
         let mut keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
             .chunks(2)
@@ -712,8 +766,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let tarantulas = self.db.get_all_tarantulas().await?;
+        let tarantulas = self.db.get_all_tarantulas(user_id).await?;
 
         let mut keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
             .chunks(2)
@@ -795,8 +850,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_feeding_records(10).await?;
+        let records = self.db.get_recent_feeding_records(user_id, 10).await?;
 
         let mut message = String::from("🍽 *Recent Feeding Records*\n\n");
         if records.is_empty() {
@@ -832,8 +888,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_health_records(10).await?;
+        let records = self.db.get_recent_health_records(user_id, 10).await?;
 
         let mut message = String::from("🏥 *Recent Health Check Records*\n\n");
         if records.is_empty() {
@@ -879,8 +936,9 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_molt_records(10).await?;
+        let records = self.db.get_recent_molt_records(user_id, 10).await?;
 
         let mut message = String::from("🐾 *Recent Molt Records*\n\n");
         if records.is_empty() {
