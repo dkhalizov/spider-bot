@@ -17,9 +17,7 @@ CREATE INDEX IF NOT EXISTS idx_cricket_colonies_user_id ON cricket_colonies(user
 ALTER TABLE feeding_events ADD COLUMN user_id BIGINT REFERENCES telegram_users(telegram_id);
 ALTER TABLE molt_records ADD COLUMN user_id BIGINT REFERENCES telegram_users(telegram_id);
 ALTER TABLE health_check_records ADD COLUMN user_id BIGINT REFERENCES telegram_users(telegram_id);
-ALTER TABLE cricket_colony_maintenance ADD COLUMN user_id BIGINT REFERENCES telegram_users(telegram_id);
 
 CREATE INDEX IF NOT EXISTS idx_feeding_events_user_id ON feeding_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_molt_records_user_id ON molt_records(user_id);
 CREATE INDEX IF NOT EXISTS idx_health_checks_user_id ON health_check_records(user_id);
-CREATE INDEX IF NOT EXISTS idx_maintenance_user_id ON cricket_colony_maintenance(user_id);

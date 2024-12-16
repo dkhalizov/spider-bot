@@ -6,11 +6,8 @@ metadata:
   namespace: spider-bot
 data:
   init.sql: |
-{{- $files := .Files.Glob "sql/*.sql" }}
-{{- if $files }}
-{{- range $files }}
-{{ $.Files.Get . | indent 4 }}
-{{- end }}
+{{- range $path, $_ := .Files.Glob "sql/*.sql" }}
+{{ $.Files.Get $path | indent 4 }}
 {{- end }}
 
 ---
