@@ -212,9 +212,7 @@ impl TarantulaBot {
         self.db.record_feeding(user_id, &feeding_event).await?;
 
         bot.send_message(chat_id, format!("✅ Feeding recorded: {} crickets", count))
-            .reply_markup(InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("« Back to Menu", "main_menu"),
-            ]]))
+            .reply_markup(Self::back_to_menu_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
 
@@ -378,10 +376,7 @@ impl TarantulaBot {
             }
         };
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
         bot.send_message(chat_id, error_message)
             .reply_markup(keyboard)
@@ -579,10 +574,7 @@ impl TarantulaBot {
             .record_molt(tarantula_id, None, None, None, user_id)
             .await?;
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
         bot.send_message(chat_id, "Molt recorded \nThank you!".to_string())
             .reply_markup(keyboard)
             .parse_mode(ParseMode::Html)
@@ -640,10 +632,7 @@ impl TarantulaBot {
         self.db
             .record_health_check(user_id, tarantula_id, health_status, None)
             .await?;
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
         bot.send_message(chat_id, "Health status recorded \nThank you!".to_string())
             .reply_markup(keyboard)
@@ -672,14 +661,6 @@ impl TarantulaBot {
             vec![InlineKeyboardButton::callback(
                 "📝 Update Count",
                 format!("colony_count_{}", colony.id),
-            )],
-            vec![InlineKeyboardButton::callback(
-                "🥗 Record Feeding",
-                format!("colony_feed_{}", colony.id),
-            )],
-            vec![InlineKeyboardButton::callback(
-                "🧹 Record Cleaning",
-                format!("colony_clean_{}", colony.id),
             )],
             vec![InlineKeyboardButton::callback("« Cancel", "main_menu")],
         ]);
@@ -735,10 +716,7 @@ impl TarantulaBot {
             0 // TODO: Implement maintenance task count
         );
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
         bot.send_message(chat_id, message)
             .reply_markup(keyboard)
@@ -770,11 +748,7 @@ impl TarantulaBot {
                     .collect()
             })
             .collect();
-
-        keyboard.push(vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]);
+        let keyboard = Self::with_back_button(keyboard);
 
         bot.send_message(chat_id, "*Record Feeding*\n\nSelect a tarantula:")
             .reply_markup(InlineKeyboardMarkup::new(keyboard))
@@ -792,7 +766,7 @@ impl TarantulaBot {
     ) -> TarantulaResult<()> {
         let tarantulas = self.db.get_all_tarantulas(user_id).await?;
 
-        let mut keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
+        let keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
             .chunks(2)
             .map(|chunk| {
                 chunk
@@ -806,11 +780,7 @@ impl TarantulaBot {
                     .collect()
             })
             .collect();
-
-        keyboard.push(vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]);
+        let keyboard = Self::with_back_button(keyboard);
 
         bot.send_message(chat_id, "*Health Check*\n\nSelect a tarantula:")
             .reply_markup(InlineKeyboardMarkup::new(keyboard))
@@ -828,10 +798,7 @@ impl TarantulaBot {
         // TODO: Add database method to fetch molt history
         let message = "Recent molt history will be displayed here.";
 
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Menu",
-            "main_menu",
-        )]]);
+        let keyboard = Self::back_to_menu_keyboard();
 
         bot.send_message(chat_id, message)
             .reply_markup(keyboard)
@@ -851,10 +818,10 @@ impl TarantulaBot {
                 InlineKeyboardButton::callback("Feeding Records", "view_feeding_records"),
                 InlineKeyboardButton::callback("Health Records", "view_health_records"),
             ],
-            vec![
-                InlineKeyboardButton::callback("Molt Records", "view_molt_records"),
-                InlineKeyboardButton::callback("Colony Records", "view_colony_records"),
-            ],
+            vec![InlineKeyboardButton::callback(
+                "Molt Records",
+                "view_molt_records",
+            )],
             vec![InlineKeyboardButton::callback(
                 "« Back to Menu",
                 "main_menu",
@@ -996,63 +963,113 @@ impl TarantulaBot {
         Ok(())
     }
 
-    pub(crate) async fn handle_colony_records(
+    pub(crate) async fn handle_colony_count(
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        colony_id: i64,
+        user_id: u64,
     ) -> TarantulaResult<()> {
-        let records = self.db.get_recent_colony_records(10).await?;
+        let colony = self
+            .db
+            .get_colony_status(user_id)
+            .await?
+            .into_iter()
+            .find(|c| c.id == colony_id)
+            .ok_or_else(|| TarantulaError::NotFound("Colony not found".to_string()))?;
 
-        let mut message = String::from("🦗 *Recent Colony Maintenance Records*\n\n");
-        if records.is_empty() {
-            message.push_str("No colony maintenance records found.");
-        } else {
-            for record in records {
-                let actions = vec![
-                    if record.food_added {
-                        Some("Food added")
-                    } else {
-                        None
-                    },
-                    if record.water_added {
-                        Some("Water added")
-                    } else {
-                        None
-                    },
-                    if record.cleaning_performed {
-                        Some("Cleaned")
-                    } else {
-                        None
-                    },
-                ];
-                let actions_str = actions.into_iter().flatten().collect::<Vec<_>>().join(", ");
+        let keyboard = InlineKeyboardMarkup::new(vec![
+            vec![
+                InlineKeyboardButton::callback(
+                    "-10",
+                    format!("colony_count_update_{}_{}", colony_id, -10),
+                ),
+                InlineKeyboardButton::callback(
+                    "-5",
+                    format!("colony_count_update_{}_{}", colony_id, -5),
+                ),
+            ],
+            vec![
+                InlineKeyboardButton::callback(
+                    "+1",
+                    format!("colony_count_update_{}_{}", colony_id, 1),
+                ),
+                InlineKeyboardButton::callback(
+                    "+5",
+                    format!("colony_count_update_{}_{}", colony_id, 5),
+                ),
+                InlineKeyboardButton::callback(
+                    "+10",
+                    format!("colony_count_update_{}_{}", colony_id, 10),
+                ),
+                InlineKeyboardButton::callback(
+                    "+50",
+                    format!("colony_count_update_{}_{}", colony_id, 10),
+                ),
+            ],
+            vec![InlineKeyboardButton::callback("« Cancel", "main_menu")],
+        ]);
 
-                message.push_str(&format!(
-                    "*{}* - {}\n• Count: {} → {}\n• Actions: {}\n{}\n\n",
-                    record.colony_name,
-                    record.maintenance_date,
-                    record.previous_count,
-                    record.new_count,
-                    if actions_str.is_empty() {
-                        "None"
-                    } else {
-                        &actions_str
-                    },
-                    record.notes.unwrap_or_default()
-                ));
-            }
-        }
-
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            "« Back to Records",
-            "view_records",
-        )]]);
-
-        bot.send_message(chat_id, message)
-            .reply_markup(keyboard)
-            .parse_mode(ParseMode::Html)
-            .await?;
+        bot.send_message(
+            chat_id,
+            format!(
+                "*Update Colony Count*\n\nColony: {}\nCurrent count: {}\nSelect adjustment:",
+                colony.colony_name, colony.current_count
+            ),
+        )
+        .reply_markup(keyboard)
+        .parse_mode(ParseMode::Html)
+        .await?;
 
         Ok(())
+    }
+
+    pub(crate) async fn handle_colony_count_update(
+        &self,
+        bot: &Bot,
+        chat_id: ChatId,
+        colony_id: i64,
+        adjustment: i32,
+        user_id: u64,
+    ) -> TarantulaResult<()> {
+        self.db
+            .update_colony_count(colony_id, adjustment, user_id)
+            .await?;
+
+        let keyboard = Self::back_to_menu_keyboard();
+
+        bot.send_message(
+            chat_id,
+            format!("✅ Colony count updated by {}", adjustment),
+        )
+        .reply_markup(keyboard)
+        .parse_mode(ParseMode::Html)
+        .await?;
+
+        Ok(())
+    }
+
+    fn back_to_menu_keyboard() -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+            "« Back to Menu",
+            "main_menu",
+        )]])
+    }
+
+    fn back_button_keyboard(text: &str, callback: &str) -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+            format!("« {}", text),
+            callback,
+        )]])
+    }
+
+    fn with_back_button(
+        mut keyboard: Vec<Vec<InlineKeyboardButton>>,
+    ) -> Vec<Vec<InlineKeyboardButton>> {
+        keyboard.push(vec![InlineKeyboardButton::callback(
+            "« Back to Menu",
+            "main_menu",
+        )]);
+        keyboard
     }
 }

@@ -201,14 +201,24 @@ impl TarantulaDB {
     pub async fn record_feeding(&self, user_id: u64, event: &FeedingEvent) -> TarantulaResult<i64> {
         let mut guard = self.conn.lock().await;
         let tx = guard.transaction()?;
-
-        // Update colony count and verify ownership in one query
+        
+        let tarantula_exists = tx.query_row(
+            "SELECT 1 FROM tarantulas WHERE id = ? AND user_id = ?",
+            params![event.tarantula_id, user_id],
+            |_| Ok(())
+        ).is_ok();
+        
+        if !tarantula_exists {
+            return Err(TarantulaError::NotFound(
+                format!("Tarantula with id {} not found or access denied", event.tarantula_id)
+            ));
+        }
         let rows_affected = tx.execute(
             "UPDATE cricket_colonies
-        SET current_count = current_count - ?1
-        WHERE id = ?2 AND user_id = ?3
-        AND current_count >= ?1",  // Ensure enough crickets available
-            params![event.number_of_crickets, event.cricket_colony_id, user_id],
+        SET current_count = current_count - ?
+        WHERE id = ? AND user_id = ?
+        AND current_count >= ?", 
+            params![event.number_of_crickets, event.cricket_colony_id, user_id, event.number_of_crickets],
         )?;
 
         if rows_affected == 0 {
@@ -217,15 +227,16 @@ impl TarantulaDB {
             ));
         }
 
-        // Insert feeding event only if tarantula belongs to user
         let result = tx.execute(
             "INSERT INTO feeding_events (
-            tarantula_id, feeding_date, cricket_colony_id,
-            number_of_crickets, feeding_status_id, notes, user_id
-        ) 
-        SELECT ?, ?, ?, ?, ?, ?, ?
-        FROM tarantulas
-        WHERE id = ? AND user_id = ?",
+            tarantula_id, 
+            feeding_date, 
+            cricket_colony_id,
+            number_of_crickets, 
+            feeding_status_id, 
+            notes, 
+            user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
             event.tarantula_id,
             event.feeding_date,
@@ -233,8 +244,6 @@ impl TarantulaDB {
             event.number_of_crickets,
             FeedingStatus::Accepted as i64,
             event.notes,
-            user_id,
-            event.tarantula_id,
             user_id,
         ],
         )?;
@@ -629,43 +638,20 @@ WHERE t.user_id = ?
             .collect::<Result<Vec<_>, _>>()
             .map_err(TarantulaError::Database)
     }
-
-    pub(crate) async fn get_recent_colony_records(
+    
+    pub(crate) async fn update_colony_count(
         &self,
-        limit: i32,
-    ) -> TarantulaResult<Vec<ColonyMaintenanceRecord>> {
-        let sql = "
-            SELECT 
-                cc.colony_name,
-                ccm.maintenance_date,
-                ccm.previous_count,
-                ccm.new_count,
-                ccm.food_added,
-                ccm.water_gel_added,
-                ccm.cleaning_performed,
-                ccm.notes
-            FROM cricket_colony_maintenance ccm
-            JOIN cricket_colonies cc ON ccm.colony_id = cc.id
-            ORDER BY ccm.maintenance_date DESC
-            LIMIT ?";
-
+        colony_id: i64,
+        adjustment: i32,
+        user_id: u64,
+    ) -> TarantulaResult<()> {
         let guard = self.conn.lock().await;
-        let mut stmt = guard.prepare(sql)?;
-        let records = stmt.query_map([limit], |row| {
-            Ok(ColonyMaintenanceRecord {
-                colony_name: row.get(0)?,
-                maintenance_date: row.get(1)?,
-                previous_count: row.get(2)?,
-                new_count: row.get(3)?,
-                food_added: row.get(4)?,
-                water_added: row.get(5)?,
-                cleaning_performed: row.get(6)?,
-                notes: row.get(7)?,
-            })
-        })?;
-
-        records
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+        guard.execute(
+            "UPDATE cricket_colonies
+            SET current_count = current_count + ?
+            WHERE id = ? AND user_id = ?",
+            params![adjustment, colony_id, user_id],
+        )?;
+        Ok(())
     }
 }

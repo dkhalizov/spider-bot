@@ -107,7 +107,6 @@ impl TarantulaBot {
             }
             Some("view_health_records") => self.handle_health_records(&bot, chat_id, user_id).await,
             Some("view_molt_records") => self.handle_molt_records(&bot, chat_id, user_id).await,
-            Some("view_colony_records") => self.handle_colony_records(&bot, chat_id).await,
 
             Some(data) if data.starts_with("feed_tarantula_") => {
                 let tarantula_id = data
@@ -187,12 +186,12 @@ impl TarantulaBot {
             }
 
             Some(data) if data.starts_with("feed_select_colony_") => {
-                let parts: Vec<&str> = data.splitn(4, '_').collect();
-                if parts.len() == 4 {
-                    let tarantula_id = parts[2].parse::<i64>().map_err(|e| {
+                let parts: Vec<&str> = data.splitn(5, '_').collect();
+                if parts.len() == 5 {
+                    let tarantula_id = parts[3].parse::<i64>().map_err(|e| {
                         TarantulaError::ValidationError(format!("Invalid tarantula ID: {}", e))
                     })?;
-                    let colony_id = parts[3].parse::<i64>().map_err(|e| {
+                    let colony_id = parts[4].parse::<i64>().map_err(|e| {
                         TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
                     })?;
                     self.handle_feed_colony_selection(
@@ -234,6 +233,34 @@ impl TarantulaBot {
                     Err(TarantulaError::ValidationError(
                         "Invalid feed confirmation data".to_string(),
                     ))
+                }
+            }
+            Some(data) if data.starts_with("colony_count_") => {
+                let colony_id = data
+                    .strip_prefix("colony_count_")
+                    .unwrap()
+                    .parse::<i64>()
+                    .map_err(|e| {
+                        TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
+                    })?;
+                self.handle_colony_count(&bot, chat_id, colony_id, user_id)
+                    .await
+            }
+            Some(data) if data.starts_with("colony_count_update_") => {
+                let parts: Vec<&str> = data.splitn(4, '_').collect();
+                if parts.len() != 4 {
+                    Err(TarantulaError::ValidationError(
+                        "Invalid colony count update data".to_string(),
+                    ))
+                } else {
+                    let colony_id = parts[2].parse::<i64>().map_err(|e| {
+                        TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
+                    })?;
+                    let adjustment = parts[3].parse::<i32>().map_err(|e| {
+                        TarantulaError::ValidationError(format!("Invalid adjustment value: {}", e))
+                    })?;
+                    self.handle_colony_count_update(&bot, chat_id, colony_id, adjustment, user_id)
+                        .await
                 }
             }
             _ => Err(TarantulaError::ValidationError(
