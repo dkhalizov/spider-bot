@@ -248,15 +248,15 @@ impl TarantulaBot {
             }
             Some(data) if data.starts_with("colony_count_update_") => {
                 let parts: Vec<&str> = data.splitn(4, '_').collect();
-                if parts.len() != 4 {
+                if parts.len() != 5 {
                     Err(TarantulaError::ValidationError(
                         "Invalid colony count update data".to_string(),
                     ))
                 } else {
-                    let colony_id = parts[2].parse::<i64>().map_err(|e| {
+                    let colony_id = parts[3].parse::<i64>().map_err(|e| {
                         TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
                     })?;
-                    let adjustment = parts[3].parse::<i32>().map_err(|e| {
+                    let adjustment = parts[4].parse::<i32>().map_err(|e| {
                         TarantulaError::ValidationError(format!("Invalid adjustment value: {}", e))
                     })?;
                     self.handle_colony_count_update(&bot, chat_id, colony_id, adjustment, user_id)
