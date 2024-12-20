@@ -1,7 +1,7 @@
 use crate::bot::bot::TarantulaBot;
-use crate::error::TarantulaError;
+use crate::error::BotError;
 use crate::models::enums::HealthStatus;
-use crate::TarantulaResult;
+use crate::BotResult;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::{CallbackQuery, Requester};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
@@ -12,7 +12,7 @@ impl TarantulaBot {
         &self,
         bot: Bot,
         query: CallbackQuery,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         log::info!("Received callback query: {:?}", query.data);
         bot.answer_callback_query(query.id).await?;
 
@@ -114,7 +114,7 @@ impl TarantulaBot {
                     .unwrap()
                     .parse::<i64>()
                     .map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid tarantula ID: {}", e))
+                        BotError::ValidationError(format!("Invalid tarantula ID: {}", e))
                     })?;
                 self.handle_feed_command(&bot, chat_id, tarantula_id, user_id)
                     .await
@@ -125,7 +125,7 @@ impl TarantulaBot {
                     .unwrap()
                     .parse::<i64>()
                     .map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid tarantula ID: {}", e))
+                        BotError::ValidationError(format!("Invalid tarantula ID: {}", e))
                     })?;
                 self.handle_health_check_command(&bot, chat_id, tarantula_id, user_id)
                     .await
@@ -133,15 +133,15 @@ impl TarantulaBot {
             Some(data) if data.starts_with("health_status_") => {
                 let parts: Vec<&str> = data.splitn(4, '_').collect();
                 if parts.len() != 4 {
-                    Err(TarantulaError::ValidationError(
+                    Err(BotError::ValidationError(
                         "Invalid health status data".to_string(),
                     ))
                 } else {
                     let tarantula_id = parts[2].parse::<i64>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid tarantula ID: {}", e))
+                        BotError::ValidationError(format!("Invalid tarantula ID: {}", e))
                     })?;
                     let health_status_id = parts[3].parse::<i64>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid health status ID: {}", e))
+                        BotError::ValidationError(format!("Invalid health status ID: {}", e))
                     })?;
                     self.handle_health_status_command(
                         &bot,
@@ -160,7 +160,7 @@ impl TarantulaBot {
                     .unwrap()
                     .parse::<i64>()
                     .map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid tarantula ID: {}", e))
+                        BotError::ValidationError(format!("Invalid tarantula ID: {}", e))
                     })?;
                 self.handle_record_molt_command(&bot, chat_id, tarantula_id, user_id)
                     .await
@@ -172,7 +172,7 @@ impl TarantulaBot {
                     .unwrap()
                     .parse::<i64>()
                     .map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
+                        BotError::ValidationError(format!("Invalid colony ID: {}", e))
                     })?;
                 let colony = self
                     .db
@@ -180,7 +180,7 @@ impl TarantulaBot {
                     .await?
                     .into_iter()
                     .find(|c| c.id == colony_id)
-                    .ok_or_else(|| TarantulaError::NotFound("Colony not found".to_string()))?;
+                    .ok_or_else(|| BotError::NotFound("Colony not found".to_string()))?;
                 self.handle_colony_maintenance_command(&bot, chat_id, &colony.colony_name, user_id)
                     .await
             }
@@ -189,10 +189,10 @@ impl TarantulaBot {
                 let parts: Vec<&str> = data.splitn(5, '_').collect();
                 if parts.len() == 5 {
                     let tarantula_id = parts[3].parse::<i64>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid tarantula ID: {}", e))
+                        BotError::ValidationError(format!("Invalid tarantula ID: {}", e))
                     })?;
                     let colony_id = parts[4].parse::<i64>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
+                        BotError::ValidationError(format!("Invalid colony ID: {}", e))
                     })?;
                     self.handle_feed_colony_selection(
                         &bot,
@@ -203,7 +203,7 @@ impl TarantulaBot {
                     )
                     .await
                 } else {
-                    Err(TarantulaError::ValidationError(
+                    Err(BotError::ValidationError(
                         "Invalid feed selection data".to_string(),
                     ))
                 }
@@ -212,13 +212,13 @@ impl TarantulaBot {
                 let parts: Vec<&str> = data.splitn(5, '_').collect();
                 if parts.len() == 5 {
                     let tarantula_id = parts[2].parse::<i64>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid tarantula ID: {}", e))
+                        BotError::ValidationError(format!("Invalid tarantula ID: {}", e))
                     })?;
                     let colony_id = parts[3].parse::<i64>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
+                        BotError::ValidationError(format!("Invalid colony ID: {}", e))
                     })?;
                     let count = parts[4].parse::<i32>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid cricket count: {}", e))
+                        BotError::ValidationError(format!("Invalid cricket count: {}", e))
                     })?;
                     self.handle_feed_confirmation(
                         &bot,
@@ -230,7 +230,7 @@ impl TarantulaBot {
                     )
                     .await
                 } else {
-                    Err(TarantulaError::ValidationError(
+                    Err(BotError::ValidationError(
                         "Invalid feed confirmation data".to_string(),
                     ))
                 }
@@ -241,7 +241,7 @@ impl TarantulaBot {
                     .unwrap()
                     .parse::<i64>()
                     .map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
+                        BotError::ValidationError(format!("Invalid colony ID: {}", e))
                     })?;
                 self.handle_colony_count(&bot, chat_id, colony_id, user_id)
                     .await
@@ -249,21 +249,21 @@ impl TarantulaBot {
             Some(data) if data.starts_with("colony_count_update_") => {
                 let parts: Vec<&str> = data.splitn(4, '_').collect();
                 if parts.len() != 5 {
-                    Err(TarantulaError::ValidationError(
+                    Err(BotError::ValidationError(
                         "Invalid colony count update data".to_string(),
                     ))
                 } else {
                     let colony_id = parts[3].parse::<i64>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid colony ID: {}", e))
+                        BotError::ValidationError(format!("Invalid colony ID: {}", e))
                     })?;
                     let adjustment = parts[4].parse::<i32>().map_err(|e| {
-                        TarantulaError::ValidationError(format!("Invalid adjustment value: {}", e))
+                        BotError::ValidationError(format!("Invalid adjustment value: {}", e))
                     })?;
                     self.handle_colony_count_update(&bot, chat_id, colony_id, adjustment, user_id)
                         .await
                 }
             }
-            _ => Err(TarantulaError::ValidationError(
+            _ => Err(BotError::ValidationError(
                 "Invalid callback data".to_string(),
             )),
         };

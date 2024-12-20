@@ -1,13 +1,13 @@
 use crate::db::init::DbInitializer;
-use crate::error::TarantulaError;
-use crate::models::cricket::{ColonyMaintenanceRecord, ColonyStatus};
+use crate::error::BotError;
+use crate::models::cricket::ColonyStatus;
 use crate::models::enums::{CricketSize, FeedingStatus, HealthStatus, MoltStage};
 use crate::models::feeding::{FeedingEvent, FeedingRecord};
 use crate::models::health::{HealthAlert, HealthRecord};
 use crate::models::molt::MoltRecord;
 use crate::models::tarantula::{MaintenanceTask, Tarantula, TarantulaListItem};
-use crate::TarantulaResult;
 use crate::models::user::TelegramUser;
+use crate::BotResult;
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -17,7 +17,7 @@ pub struct TarantulaDB {
 }
 
 impl TarantulaDB {
-    pub fn new(db_path: &str) -> TarantulaResult<Self> {
+    pub fn new(db_path: &str) -> BotResult<Self> {
         let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
             | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
             | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE;
@@ -41,7 +41,7 @@ impl TarantulaDB {
         estimated_age_months: i64,
         enclosure_number: Option<&str>,
         notes: Option<&str>,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let guard = self.conn.lock().await;
         guard.execute(
             "INSERT INTO tarantulas (
@@ -69,7 +69,7 @@ impl TarantulaDB {
         current_count: i32,
         container_number: &str,
         notes: Option<&str>,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let guard = self.conn.lock().await;
         guard.execute(
             "INSERT INTO cricket_colonies (
@@ -87,7 +87,7 @@ impl TarantulaDB {
         Ok(())
     }
 
-    pub async fn ensure_user_exists(&self, user: &TelegramUser) -> TarantulaResult<()> {
+    pub async fn ensure_user_exists(&self, user: &TelegramUser) -> BotResult<()> {
         let guard = self.conn.lock().await;
         guard.execute(
             "INSERT INTO telegram_users (telegram_id, username, first_name, last_name)
@@ -107,7 +107,7 @@ impl TarantulaDB {
         Ok(())
     }
 
-    pub async fn get_all_tarantulas(&self, user_id: u64) -> TarantulaResult<Vec<TarantulaListItem>> {
+    pub async fn get_all_tarantulas(&self, user_id: u64) -> BotResult<Vec<TarantulaListItem>> {
         let sql = "
         SELECT
             t.id,
@@ -152,13 +152,13 @@ impl TarantulaDB {
                     })
                 },
             )
-            .map_err(TarantulaError::Database)?;
+            .map_err(BotError::Database)?;
 
         items
             .collect::<rusqlite::Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
-    pub async fn get_tarantulas_due_feeding(&self, user_id: u64) -> TarantulaResult<Vec<TarantulaListItem>> {
+    pub async fn get_tarantulas_due_feeding(&self, user_id: u64) -> BotResult<Vec<TarantulaListItem>> {
         let sql = format!(
             "
         SELECT
@@ -192,13 +192,13 @@ impl TarantulaDB {
                     current_status: row.get(5)?,
                 })
             })
-            .map_err(TarantulaError::Database)?;
+            .map_err(BotError::Database)?;
 
         items
             .collect::<rusqlite::Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
-    pub async fn record_feeding(&self, user_id: u64, event: &FeedingEvent) -> TarantulaResult<i64> {
+    pub async fn record_feeding(&self, user_id: u64, event: &FeedingEvent) -> BotResult<i64> {
         let mut guard = self.conn.lock().await;
         let tx = guard.transaction()?;
         
@@ -209,7 +209,7 @@ impl TarantulaDB {
         ).is_ok();
         
         if !tarantula_exists {
-            return Err(TarantulaError::NotFound(
+            return Err(BotError::NotFound(
                 format!("Tarantula with id {} not found or access denied", event.tarantula_id)
             ));
         }
@@ -222,7 +222,7 @@ impl TarantulaDB {
         )?;
 
         if rows_affected == 0 {
-            return Err(TarantulaError::NotFound(
+            return Err(BotError::NotFound(
                 "Colony not found, access denied, or insufficient crickets".to_string()
             ));
         }
@@ -249,7 +249,7 @@ impl TarantulaDB {
         )?;
 
         if result == 0 {
-            return Err(TarantulaError::NotFound(
+            return Err(BotError::NotFound(
                 format!("Tarantula with id {} not found or access denied", event.tarantula_id)
             ));
         }
@@ -266,7 +266,7 @@ impl TarantulaDB {
         complications: Option<String>,
         notes: Option<String>,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let mut guard = self.conn.lock().await;
         let tx = guard.transaction()?;
         let post_molt_id = MoltStage::PostMolt as i64;
@@ -281,7 +281,7 @@ impl TarantulaDB {
         )?;
 
         if rows_affected == 0 {
-            return Err(TarantulaError::NotFound(
+            return Err(BotError::NotFound(
                 format!("Tarantula with id {} not found or access denied", tarantula_id)
             ));
         }
@@ -305,7 +305,7 @@ impl TarantulaDB {
         tarantula_id: i64,
         status: HealthStatus,
         notes: Option<String>,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let mut guard = self.conn.lock().await;
         let tx = guard.transaction()?;
         let status_id = status as i64;
@@ -320,7 +320,7 @@ impl TarantulaDB {
         )?;
 
         if rows_affected == 0 {
-            return Err(TarantulaError::NotFound(
+            return Err(BotError::NotFound(
                 format!("Tarantula with id {} not found or access denied", tarantula_id)
             ));
         }
@@ -339,7 +339,7 @@ impl TarantulaDB {
         Ok(())
     }
 
-    pub async fn get_colony_status(&self, user_id: u64) -> TarantulaResult<Vec<ColonyStatus>> {
+    pub async fn get_colony_status(&self, user_id: u64) -> BotResult<Vec<ColonyStatus>> {
         let sql = "SELECT
             cc.id,
             cc.colony_name,
@@ -382,14 +382,14 @@ impl TarantulaDB {
                     weeks_remaining: row.get(5)?,
                 })
             })
-            .map_err(TarantulaError::Database)?;
+            .map_err(BotError::Database)?;
 
         colonies
             .collect::<Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
 
-    pub async fn get_health_alerts(&self, user_id: u64) -> TarantulaResult<Vec<HealthAlert>> {
+    pub async fn get_health_alerts(&self, user_id: u64) -> BotResult<Vec<HealthAlert>> {
         let sql = format!("SELECT
         t.id,
         t.name,
@@ -438,14 +438,14 @@ impl TarantulaDB {
                     days_in_state: row.get(4)?,
                 })
             })
-            .map_err(TarantulaError::Database)?;
+            .map_err(BotError::Database)?;
 
         alerts
             .collect::<Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
 
-    pub async fn get_maintenance_tasks(&self, user_id: u64) -> TarantulaResult<Vec<MaintenanceTask>> {
+    pub async fn get_maintenance_tasks(&self, user_id: u64) -> BotResult<Vec<MaintenanceTask>> {
         let sql = format!("SELECT
         t.id,
         t.name,
@@ -492,10 +492,10 @@ WHERE t.user_id = ?
 
         tasks
             .collect::<Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
 
-    pub async fn get_tarantula_by_id(&self, user_id: u64, id: i64) -> TarantulaResult<Tarantula> {
+    pub async fn get_tarantula_by_id(&self, user_id: u64, id: i64) -> BotResult<Tarantula> {
         let sql = "SELECT * FROM tarantulas WHERE id = ? AND user_id = ?";
         let guard = self.conn.lock().await;
         let mut stmt = guard.prepare(sql)?;
@@ -516,9 +516,9 @@ WHERE t.user_id = ?
         })
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => {
-                    TarantulaError::NotFound(format!("Tarantula with id {} not found", id))
+                    BotError::NotFound(format!("Tarantula with id {} not found", id))
                 }
-                e => TarantulaError::Database(e),
+                e => BotError::Database(e),
             })
     }
 
@@ -526,7 +526,7 @@ WHERE t.user_id = ?
         &self,
         user_id: u64,
         limit: i32,
-    ) -> TarantulaResult<Vec<FeedingRecord>> {
+    ) -> BotResult<Vec<FeedingRecord>> {
         let sql = "
             SELECT 
                 t.name as tarantula_name,
@@ -558,14 +558,14 @@ WHERE t.user_id = ?
 
         records
             .collect::<Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
 
     pub(crate) async fn get_recent_health_records(
         &self,
         user_id: u64,
         limit: i32,
-    ) -> TarantulaResult<Vec<HealthRecord>> {
+    ) -> BotResult<Vec<HealthRecord>> {
         let sql = "
             SELECT 
                 t.name as tarantula_name,
@@ -598,14 +598,14 @@ WHERE t.user_id = ?
 
         records
             .collect::<Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
 
     pub(crate) async fn get_recent_molt_records(
         &self,
         user_id: u64,
         limit: i32,
-    ) -> TarantulaResult<Vec<MoltRecord>> {
+    ) -> BotResult<Vec<MoltRecord>> {
         let sql = "
             SELECT 
                 t.name as tarantula_name,
@@ -636,7 +636,7 @@ WHERE t.user_id = ?
 
         records
             .collect::<Result<Vec<_>, _>>()
-            .map_err(TarantulaError::Database)
+            .map_err(BotError::Database)
     }
     
     pub(crate) async fn update_colony_count(
@@ -644,7 +644,7 @@ WHERE t.user_id = ?
         colony_id: i64,
         adjustment: i32,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let guard = self.conn.lock().await;
         guard.execute(
             "UPDATE cricket_colonies

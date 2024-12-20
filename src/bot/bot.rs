@@ -1,12 +1,12 @@
 use crate::bot::commands::Command;
 use crate::bot::notifications::NotificationSystem;
 use crate::db::db::TarantulaDB;
-use crate::error::TarantulaError;
+use crate::error::BotError;
 use crate::models::enums::HealthStatus;
 use crate::models::feeding::FeedingEvent;
 use crate::models::models::DbDateTime;
 use crate::models::user::TelegramUser;
-use crate::TarantulaResult;
+use crate::BotResult;
 use chrono::{NaiveDateTime, Utc};
 use std::env;
 use std::sync::Arc;
@@ -97,7 +97,7 @@ impl TarantulaBot {
         chat_id: ChatId,
         tarantula_id: i64,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
         let colonies = self.db.get_colony_status(user_id).await?;
 
@@ -141,14 +141,14 @@ impl TarantulaBot {
         tarantula_id: i64,
         colony_id: i64,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let colony = self
             .db
             .get_colony_status(user_id)
             .await?
             .into_iter()
             .find(|c| c.id == colony_id)
-            .ok_or_else(|| TarantulaError::NotFound("Colony not found".to_string()))?;
+            .ok_or_else(|| BotError::NotFound("Colony not found".to_string()))?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![
@@ -198,7 +198,7 @@ impl TarantulaBot {
         colony_id: i64,
         count: i32,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let feeding_event = FeedingEvent {
             id: None,
             tarantula_id,
@@ -219,7 +219,7 @@ impl TarantulaBot {
         Ok(())
     }
 
-    async fn handle_command(&self, bot: Bot, msg: Message, cmd: Command) -> TarantulaResult<()> {
+    async fn handle_command(&self, bot: Bot, msg: Message, cmd: Command) -> BotResult<()> {
         let user = msg.from.unwrap();
         let user = TelegramUser {
             telegram_id: user.id.0,
@@ -290,7 +290,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![
                 InlineKeyboardButton::callback("🕷 List Tarantulas", "list_tarantulas"),
@@ -357,16 +357,16 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
-        error: TarantulaError,
+        error: BotError,
     ) -> Result<(), teloxide::RequestError> {
         let error_message = match error {
-            TarantulaError::NotFound(msg) => format!("❌ {}", msg),
-            TarantulaError::ValidationError(msg) => format!("⚠️ {}", msg),
-            TarantulaError::Database(e) => {
+            BotError::NotFound(msg) => format!("❌ {}", msg),
+            BotError::ValidationError(msg) => format!("⚠️ {}", msg),
+            BotError::Database(e) => {
                 log::error!("Database error: {:?}", e);
                 "❌ A database error occurred. Please try again later.".to_string()
             }
-            TarantulaError::Telegram(e) => {
+            BotError::Telegram(e) => {
                 log::error!("Telegram error: {:?}", e);
                 "❌ A communication error occurred. Please try again later.".to_string()
             }
@@ -390,7 +390,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let tarantulas = self.db.get_all_tarantulas(user_id).await?;
         let mut message = String::from("🕷 *Your Tarantulas*\n\n");
 
@@ -431,7 +431,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let due_feedings = self.db.get_tarantulas_due_feeding(user_id).await?;
 
         let mut message = String::from("🍽 *Feeding Schedule*\n\n");
@@ -465,7 +465,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let alerts = self.db.get_health_alerts(user_id).await?;
 
         let mut message = String::from("🏥 *Health Alerts*\n\n");
@@ -498,7 +498,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let tasks = self.db.get_maintenance_tasks(user_id).await?;
 
         let mut message = String::from("🧹 *Maintenance Tasks*\n\n");
@@ -531,7 +531,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let colonies = self.db.get_colony_status(user_id).await?;
 
         let mut message = String::from("🦗 *Cricket Colonies*\n\n");
@@ -569,7 +569,7 @@ impl TarantulaBot {
         chat_id: ChatId,
         tarantula_id: i64,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         self.db
             .record_molt(tarantula_id, None, None, None, user_id)
             .await?;
@@ -588,7 +588,7 @@ impl TarantulaBot {
         chat_id: ChatId,
         tarantula_id: i64,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![
@@ -628,7 +628,7 @@ impl TarantulaBot {
         tarantula_id: i64,
         health_status: HealthStatus,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         self.db
             .record_health_check(user_id, tarantula_id, health_status, None)
             .await?;
@@ -648,13 +648,13 @@ impl TarantulaBot {
         chat_id: ChatId,
         colony_name: &str,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let colonies = self.db.get_colony_status(user_id).await?;
         let colony = colonies
             .iter()
             .find(|c| c.colony_name.eq_ignore_ascii_case(colony_name))
             .ok_or_else(|| {
-                TarantulaError::NotFound(format!("Colony '{}' not found", colony_name))
+                BotError::NotFound(format!("Colony '{}' not found", colony_name))
             })?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![
@@ -683,7 +683,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let due_feedings = self.db.get_tarantulas_due_feeding(user_id).await?;
         let health_alerts = self.db.get_health_alerts(user_id).await?;
         let colonies = self.db.get_colony_status(user_id).await?;
@@ -731,7 +731,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let tarantulas = self.db.get_all_tarantulas(user_id).await?;
 
         let mut keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
@@ -763,7 +763,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let tarantulas = self.db.get_all_tarantulas(user_id).await?;
 
         let keyboard: Vec<Vec<InlineKeyboardButton>> = tarantulas
@@ -794,7 +794,7 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         // TODO: Add database method to fetch molt history
         let message = "Recent molt history will be displayed here.";
 
@@ -812,7 +812,7 @@ impl TarantulaBot {
         &self,
         bot: &Bot,
         chat_id: ChatId,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![
                 InlineKeyboardButton::callback("Feeding Records", "view_feeding_records"),
@@ -840,7 +840,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let records = self.db.get_recent_feeding_records(user_id, 10).await?;
 
         let mut message = String::from("🍽 *Recent Feeding Records*\n\n");
@@ -878,7 +878,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let records = self.db.get_recent_health_records(user_id, 10).await?;
 
         let mut message = String::from("🏥 *Recent Health Check Records*\n\n");
@@ -926,7 +926,7 @@ impl TarantulaBot {
         bot: &Bot,
         chat_id: ChatId,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let records = self.db.get_recent_molt_records(user_id, 10).await?;
 
         let mut message = String::from("🐾 *Recent Molt Records*\n\n");
@@ -969,14 +969,14 @@ impl TarantulaBot {
         chat_id: ChatId,
         colony_id: i64,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         let colony = self
             .db
             .get_colony_status(user_id)
             .await?
             .into_iter()
             .find(|c| c.id == colony_id)
-            .ok_or_else(|| TarantulaError::NotFound("Colony not found".to_string()))?;
+            .ok_or_else(|| BotError::NotFound("Colony not found".to_string()))?;
 
         let keyboard = InlineKeyboardMarkup::new(vec![
             vec![
@@ -1031,7 +1031,7 @@ impl TarantulaBot {
         colony_id: i64,
         adjustment: i32,
         user_id: u64,
-    ) -> TarantulaResult<()> {
+    ) -> BotResult<()> {
         self.db
             .update_colony_count(colony_id, adjustment, user_id)
             .await?;
