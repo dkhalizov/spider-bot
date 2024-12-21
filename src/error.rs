@@ -5,6 +5,9 @@ pub enum BotError {
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 
+    #[error("Pool error: {0}")]
+    DatabasePool(#[from] r2d2::Error),
+
     #[error("Telegram error: {0}")]
     Telegram(#[from] teloxide::RequestError),
 
