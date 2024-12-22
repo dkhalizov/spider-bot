@@ -10,9 +10,8 @@ use crate::models::user::TelegramUser;
 use crate::BotResult;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection};
+use rusqlite::params;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 pub struct TarantulaDB {
     pool: Arc<Pool<SqliteConnectionManager>>,
