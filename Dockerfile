@@ -9,6 +9,7 @@ RUN apt-get update && \
 COPY Cargo.toml Cargo.lock ./
 
 COPY src ./src
+COPY bot_macros ./bot_macros
 
 RUN cargo build --release
 
