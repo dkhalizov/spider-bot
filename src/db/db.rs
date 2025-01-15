@@ -285,7 +285,7 @@ impl TarantulaDB {
         // Update tarantula and verify ownership in one query
         let rows_affected = tx.execute(
             "UPDATE tarantulas SET 
-            last_molt_date = datetime('now'),
+            last_molt_date = date('now'),
             current_molt_stage_id = ?
         WHERE id = ? AND user_id = ?",
             params![post_molt_id, tarantula_id, user_id],
