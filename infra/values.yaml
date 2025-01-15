@@ -12,6 +12,8 @@ env:
       secretKeyRef:
         name: spider-bot-secret
         key: bot-token
+  - name: DEFAULT_CHAT_ID
+    value: "141671143"
 
 resources:
   limits:
