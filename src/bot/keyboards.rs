@@ -37,13 +37,6 @@ pub(crate) fn welcome_keyboard() -> InlineKeyboardMarkup {
     ])
 }
 
-pub(crate) fn back_to_menu_keyboard() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "« Back to Menu",
-        MainMenu.to_string(),
-    )]])
-}
-
 pub(crate) fn feed_count_selection_keyboard(
     tarantula_id: i64,
     colony_id: i64,
@@ -103,23 +96,4 @@ pub(crate) fn feed_command_keyboard(
         MainMenu.to_string(),
     )]);
     keyboard
-}
-
-pub(crate) fn tarantula_detail_keyboard(tarantula_id: i64) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![
-        vec![
-            InlineKeyboardButton::callback(
-                "🍽 Feed",
-                BotCallback::FeedSelectColony(tarantula_id, 0).to_string(),
-            ),
-            InlineKeyboardButton::callback(
-                "📋 Schedule",
-                BotCallback::ViewFeedingSchedule(tarantula_id).to_string(),
-            ),
-        ],
-        vec![InlineKeyboardButton::callback(
-            "« Back to List",
-            BotCallback::ListTarantulas.to_string(),
-        )],
-    ])
 }

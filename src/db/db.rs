@@ -343,7 +343,7 @@ impl TarantulaDB {
     pub async fn record_molt(
         &self,
         tarantula_id: i64,
-        length_cm: Option<f32>,
+        length_cm: f32,
         complications: Option<String>,
         notes: Option<String>,
         user_id: u64,

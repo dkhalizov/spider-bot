@@ -1,3 +1,4 @@
+use teloxide::dispatching::dialogue;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -22,4 +23,7 @@ pub enum BotError {
 
     #[error("Operation failed: {0}")]
     OperationError(String),
+
+    #[error("Dialog failed: {0}")]
+    DialogErr(#[from] dialogue::InMemStorageError),
 }

@@ -3,3 +3,4 @@ mod commands;
 mod callbacks;
 mod notifications;
 mod keyboards;
+mod dialog;

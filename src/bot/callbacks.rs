@@ -4,10 +4,9 @@ use crate::BotError;
 use crate::BotResult;
 use async_trait::async_trait;
 use bot_macros::BotCallback;
-use std::fmt::Display;
 use std::sync::Arc;
-use teloxide::dispatching::dialogue::GetChatId;
-use teloxide::prelude::{CallbackQuery, ChatId, Requester};
+use teloxide::dispatching::dialogue::{GetChatId};
+use teloxide::prelude::{CallbackQuery, Requester};
 
 #[derive(BotCallback, Debug, Clone)]
 pub enum BotCallback {
@@ -31,7 +30,7 @@ pub enum BotCallback {
     FeedTarantula(i64),
     HealthCheck(i64),
     HealthStatus(i64, i64), // tarantula_id, health_status_id
-    MoltSimple(f32, i64), // size cm after, tarantula_id
+    MoltSimple(i64),        // size cm after, tarantula_id
     ColonyMaintenanceMenu(i64),
     FeedSelectColony(i64, i64), // tarantula_id, colony_id
     FeedConfirm(i64, i64, i32), // tarantula_id, colony_id, count
@@ -337,14 +336,10 @@ impl BotCallback {
         &self,
         bot: &Arc<TarantulaBot>,
         query: CallbackQuery,
-        size: &f32,
         tarantula_id: &i64,
     ) -> BotResult<()> {
         if let Some(chat_id) = query.chat_id() {
-            if let Some(msg) = query.message {
-                bot.record_molt_command(chat_id, msg.id(), *tarantula_id, Some(*size), query.from.id.0)
-                    .await?;
-            }
+            bot.molt_simple_callback(chat_id, *tarantula_id).await?
         };
         Ok(())
     }
@@ -448,7 +443,7 @@ impl BotCallback {
     }
     async fn handle_view_feeding_schedule(
         &self,
-        bot: &TarantulaBot,
+        bot: &Arc<TarantulaBot>,
         query: CallbackQuery,
         tarantula_id: &i64,
     ) -> BotResult<()> {
@@ -460,5 +455,4 @@ impl BotCallback {
         };
         Ok(())
     }
-    
 }

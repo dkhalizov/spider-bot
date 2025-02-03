@@ -6,6 +6,7 @@ use crate::bot::callbacks::BotCallback::FeedTarantula;
 use crate::bot::callbacks::BotCallback::MainMenu;
 use crate::bot::callbacks::BotCallback::MoltSimple;
 use crate::bot::commands::Command;
+use crate::bot::dialog::{DialogueState};
 use crate::bot::keyboards::{
     feed_command_keyboard, feed_count_selection_keyboard, welcome_keyboard,
 };
@@ -21,30 +22,31 @@ use crate::BotResult;
 use chrono::{NaiveDateTime, Utc};
 use future::BoxFuture;
 use futures_core::future;
+use std::collections::BTreeMap;
 use std::env;
 use std::fmt::Debug;
 use std::sync::Arc;
+use teloxide::dispatching::dialogue::{InMemStorage, Storage};
 use teloxide::dispatching::{Dispatcher, DpHandlerDescription, UpdateFilterExt};
 use teloxide::dptree::Handler;
 use teloxide::error_handlers::ErrorHandler;
-use teloxide::payloads::{
-    EditMessageReplyMarkupInlineSetters, EditMessageReplyMarkupSetters, SendMessageSetters,
+use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
+use teloxide::prelude::{
+    CallbackQuery, ChatId, DependencyMap, Message, Requester, Update,
 };
-use teloxide::prelude::{CallbackQuery, ChatId, DependencyMap, Message, Requester, Update};
 use teloxide::types::{
-    InlineKeyboardButton, InlineKeyboardMarkup, KeyboardMarkup, MessageId, ParseMode,
+    InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode,
 };
 use teloxide::utils::command::BotCommands;
 use teloxide::{dptree, filter_command, Bot, RequestError};
-use BotCallback::{
-    FeedingSchedule, ListTarantulas, StatusOverview,
-};
+use BotCallback::ListTarantulas;
 
 #[derive(Clone)]
 pub struct TarantulaBot {
     pub(crate) bot: Bot,
-    db: Arc<TarantulaDB>,
-    notification_system: Arc<NotificationSystem>,
+    pub(crate) db: Arc<TarantulaDB>,
+    pub(crate) notification_system: Arc<NotificationSystem>,
+    dialogue: Arc<InMemStorage<DialogueState>>,
 }
 
 pub struct ChanErrHandler {
@@ -78,6 +80,7 @@ impl TarantulaBot {
             bot,
             db,
             notification_system,
+            dialogue: InMemStorage::<DialogueState>::new(),
         }
     }
 
@@ -87,56 +90,39 @@ impl TarantulaBot {
         let handler = Self::build_handler();
 
         let mut container = DependencyMap::new();
-        let arc = Arc::new(self);
+        let arc = Arc::new(self.clone());
         container.insert(arc.clone());
-
-        Dispatcher::builder((*arc).clone().bot, handler)
-            .dependencies(container)
-            .error_handler(Arc::new(ChanErrHandler {
-                bot: (*arc).clone().bot,
-            }))
-            .enable_ctrlc_handler()
-            .build()
-            .dispatch()
-            .await;
+        container.insert(self.dialogue.clone());
+        Dispatcher::builder(
+            (*arc).clone().bot,
+            dptree::entry()
+                .branch(handler)
+                .branch(TarantulaBot::dialogue_handler()),
+        )
+        .dependencies(container)
+        .error_handler(Arc::new(ChanErrHandler {
+            bot: (*arc).clone().bot,
+        }))
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch()
+        .await;
     }
 
     fn build_handler() -> Handler<'static, DependencyMap, BotResult<()>, DpHandlerDescription> {
         let handler = dptree::entry()
-            .branch(
-                Update::filter_callback_query().endpoint(move |a: Arc<TarantulaBot>, q: CallbackQuery| {
-                    async move { a.handle_callback(&a.clone(), q).await }
-                }),
-            )
+            .branch(Update::filter_callback_query().endpoint(
+                move |a: Arc<TarantulaBot>, q: CallbackQuery| async move {
+                    a.handle_callback(&a.clone(), q).await
+                },
+            ))
             .branch(
                 Update::filter_message().branch(filter_command::<Command, _>().endpoint(
-                    move |a: Arc<TarantulaBot>, msg: Message, cmd: Command| {
-                        async move { a.handle_command(msg, cmd).await }
+                    move |a: Arc<TarantulaBot>, msg: Message, cmd: Command| async move {
+                        a.handle_command(msg, cmd).await
                     },
                 )),
-            ).branch(
-            Update::filter_message().endpoint(move |a: Arc<TarantulaBot>, msg: Message| {
-                async move {
-                    if let Some(text) = msg.text() {
-                        if text.starts_with('/') {
-                            let command = text.split_whitespace().next().unwrap_or(text);
-                            let help_message = format!(
-                                "Unknown command: {}\n\nAvailable commands:\n{}",
-                                command,
-                                Command::descriptions().to_string()
-                            );
-                            a.bot.send_message(msg.chat.id, help_message).await?;
-                        } else {
-                            a.bot.send_message(
-                                msg.chat.id,
-                                "I can only respond to commands. Type /help to see available commands.",
-                            ).await?;
-                        }
-                    }
-                    Ok(())
-                }
-            }),
-        );
+            );
         handler
     }
 
@@ -530,7 +516,7 @@ impl TarantulaBot {
         chat_id: ChatId,
         message_id: MessageId,
         tarantula_id: i64,
-        size: Option<f32>,
+        size: f32,
         user_id: u64,
     ) -> BotResult<()> {
         self.db
@@ -538,11 +524,10 @@ impl TarantulaBot {
             .await?;
 
         let keyboard = Self::back_to_menu_keyboard();
-        self.replay_with_edit(
+        self.reply_with_send(
             chat_id,
-            message_id,
             "Molt recorded \nThank you!".to_string(),
-            keyboard,
+            Some(keyboard),
         )
         .await
     }
@@ -770,13 +755,8 @@ impl TarantulaBot {
         message_id: MessageId,
         user_id: u64,
     ) -> BotResult<()> {
-        // TODO: Add database method to fetch molt history
-        let message = "Recent molt history will be displayed here.";
-
-        let keyboard = Self::back_to_menu_keyboard();
-
-        self.replay_with_edit(chat_id, message_id, message.to_string(), keyboard)
-            .await
+        self.view_molt_records(chat_id, message_id, user_id).await?;
+        Ok(())
     }
 
     pub(crate) async fn view_records(
@@ -935,7 +915,7 @@ impl TarantulaBot {
                         InlineKeyboardButton::callback(
                             format!("{} ({})", t.name, t.species_name),
                             //todo add actual size
-                            MoltSimple(0.0, t.id).to_string(),
+                            MoltSimple(t.id).to_string(),
                         )
                     })
                     .collect()
@@ -1074,12 +1054,14 @@ impl TarantulaBot {
         let schedule = self
             .db
             .get_feeding_schedule(tarantula.species_id, current_size)
-            .await?.unwrap();
+            .await?
+            .unwrap();
 
         let frequency = self
             .db
             .get_feeding_frequency(schedule.frequency_id.unwrap_or(1))
-            .await?.unwrap();
+            .await?
+            .unwrap();
 
         let message = format!(
             "*Feeding Schedule for {}*\n\n\
@@ -1101,12 +1083,10 @@ impl TarantulaBot {
             frequency.max_days
         );
 
-        let keyboard = InlineKeyboardMarkup::new(vec![
-            vec![InlineKeyboardButton::callback(
-                "« Back",
-                ListTarantulas.to_string(),
-            )],
-        ]);
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+            "« Back",
+            ListTarantulas.to_string(),
+        )]]);
         self.replay_with_edit(chat_id, message_id, message, keyboard)
             .await
     }
@@ -1144,5 +1124,21 @@ impl TarantulaBot {
             MainMenu.to_string(),
         )]);
         keyboard
+    }
+
+    pub(crate) async fn molt_simple_callback(
+        &self,
+        chat_id: ChatId,
+        tarantula_id: i64,
+    ) -> BotResult<()> {
+        self.bot
+            .send_message(chat_id, "Please enter the molt size in centimeters:")
+            .await?;
+
+        self.dialogue
+            .clone()
+            .update_dialogue(chat_id, DialogueState::RecordMolt { tarantula_id })
+            .await?;
+        Ok(())
     }
 }
