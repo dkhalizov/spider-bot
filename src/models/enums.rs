@@ -81,7 +81,7 @@ pub enum MoltStage {
     PreMolt = 2,
     Molting = 3,
     PostMolt = 4,
-    Failed = 5,     // New: Molt complications
+    Failed = 5,     
 }
 
 impl MoltStage {

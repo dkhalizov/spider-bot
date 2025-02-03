@@ -6,12 +6,12 @@ use crate::bot::callbacks::BotCallback::FeedTarantula;
 use crate::bot::callbacks::BotCallback::MainMenu;
 use crate::bot::callbacks::BotCallback::MoltSimple;
 use crate::bot::commands::Command;
-use crate::bot::dialog::{DialogueState};
+use crate::bot::dialog::DialogueState;
 use crate::bot::keyboards::{
     feed_command_keyboard, feed_count_selection_keyboard, welcome_keyboard,
 };
 use crate::bot::notifications::NotificationSystem;
-use crate::db::db::TarantulaDB;
+use crate::db::db::{AddColonyParams, AddTarantulaParams, TarantulaDB, TarantulaOperations};
 use crate::error::BotError;
 use crate::models::cricket::ColonyStatus;
 use crate::models::enums::HealthStatus;
@@ -31,12 +31,8 @@ use teloxide::dispatching::{Dispatcher, DpHandlerDescription, UpdateFilterExt};
 use teloxide::dptree::Handler;
 use teloxide::error_handlers::ErrorHandler;
 use teloxide::payloads::{EditMessageReplyMarkupSetters, SendMessageSetters};
-use teloxide::prelude::{
-    CallbackQuery, ChatId, DependencyMap, Message, Requester, Update,
-};
-use teloxide::types::{
-    InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode,
-};
+use teloxide::prelude::{CallbackQuery, ChatId, DependencyMap, Message, Requester, Update};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
 use teloxide::utils::command::BotCommands;
 use teloxide::{dptree, filter_command, Bot, RequestError};
 use BotCallback::ListTarantulas;
@@ -154,14 +150,13 @@ impl TarantulaBot {
                 self.db
                     .add_tarantula(
                         user.telegram_id,
-                        &*name,
-                        species,
-                        &*date,
-                        age_months,
-                        None,
-                        match notes.as_str() {
-                            "-" => None,
-                            _ => Some(&*notes),
+                        AddTarantulaParams {
+                            name,
+                            species_id: species,
+                            acquisition_date: date,
+                            estimated_age_months: age_months,
+                            notes: Some(notes),
+                            enclosure_number: None,
                         },
                     )
                     .await?;
@@ -172,14 +167,13 @@ impl TarantulaBot {
                 self.db
                     .add_colony(
                         user.telegram_id,
-                        &*colony_name,
-                        size_type_id,
-                        current_count,
-                        &*container_name,
-                        match notes.as_str() {
-                            "-" => None,
-                            _ => Some(&*notes),
-                        },
+                        AddColonyParams{
+                            colony_name,
+                            size_type_id,
+                            current_count,
+                            container_number: container_name,
+                            notes: Some(notes)
+                        }
                     )
                     .await?;
                 self.send_welcome_message(msg.chat.id, user.telegram_id)
@@ -300,7 +294,7 @@ impl TarantulaBot {
             notes: None,
         };
 
-        self.db.record_feeding(user_id, &feeding_event).await?;
+        self.db.record_feeding(user_id, feeding_event).await?;
 
         self.replay_with_edit(
             chat_id,
@@ -1046,10 +1040,10 @@ impl TarantulaBot {
         tarantula_id: i64,
         user_id: u64,
     ) -> BotResult<()> {
-        // Get tarantula details
+        
         let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
 
-        // Get current size and appropriate schedule
+        
         let current_size = self.db.get_current_size(tarantula_id).await?;
         let schedule = self
             .db

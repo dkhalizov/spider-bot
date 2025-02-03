@@ -1,4 +1,4 @@
-use crate::db::db::TarantulaDB;
+use crate::db::db::{TarantulaDB, TarantulaOperations};
 use std::collections::HashMap;
 use std::sync::Arc;
 use teloxide::payloads::SendMessageSetters;
@@ -11,7 +11,7 @@ use tokio::time::{self, Duration};
 #[derive(Clone)]
 pub struct NotificationSystem {
     bot: Bot,
-    db: Arc<TarantulaDB>,
+    db: Arc<dyn TarantulaOperations>,
     user_chats: Arc<RwLock<HashMap<u64, ChatId>>>,
 }
 
@@ -56,7 +56,7 @@ impl NotificationSystem {
                         message.clear();
                         message.push_str("🍽 *Feeding Due*\n\n");
 
-                        // Group by status
+                        
                         let mut never_fed = Vec::new();
                         let mut overdue = Vec::new();
                         let mut due = Vec::new();
@@ -71,7 +71,7 @@ impl NotificationSystem {
                             }
                         }
 
-                        // Never fed section
+                        
                         if !never_fed.is_empty() {
                             message.push_str("❗️ *Never Fed*\n");
                             for t in never_fed {
@@ -80,7 +80,7 @@ impl NotificationSystem {
                             message.push('\n');
                         }
 
-                        // Overdue section
+                        
                         if !overdue.is_empty() {
                             message.push_str("⚠️ *Overdue*\n");
                             for t in overdue {
@@ -94,7 +94,7 @@ impl NotificationSystem {
                             message.push('\n');
                         }
 
-                        // Due section
+                        
                         if !due.is_empty() {
                             message.push_str("📅 *Due for Feeding*\n");
                             for t in due {

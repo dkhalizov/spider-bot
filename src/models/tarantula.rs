@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use rusqlite::Row;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
