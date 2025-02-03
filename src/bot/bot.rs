@@ -167,13 +167,13 @@ impl TarantulaBot {
                 self.db
                     .add_colony(
                         user.telegram_id,
-                        AddColonyParams{
+                        AddColonyParams {
                             colony_name,
                             size_type_id,
                             current_count,
                             container_number: container_name,
-                            notes: Some(notes)
-                        }
+                            notes: Some(notes),
+                        },
                     )
                     .await?;
                 self.send_welcome_message(msg.chat.id, user.telegram_id)
@@ -1040,10 +1040,8 @@ impl TarantulaBot {
         tarantula_id: i64,
         user_id: u64,
     ) -> BotResult<()> {
-        
         let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
 
-        
         let current_size = self.db.get_current_size(tarantula_id).await?;
         let schedule = self
             .db

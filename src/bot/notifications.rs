@@ -1,22 +1,23 @@
 use crate::db::db::{TarantulaDB, TarantulaOperations};
 use std::collections::HashMap;
 use std::sync::Arc;
+use chrono::Local;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::{ChatId, Requester};
 use teloxide::types::ParseMode;
 use teloxide::Bot;
 use tokio::sync::RwLock;
 use tokio::time::{self, Duration};
-
+const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(3600);
 #[derive(Clone)]
 pub struct NotificationSystem {
     bot: Bot,
-    db: Arc<dyn TarantulaOperations>,
+    db: Arc<dyn TarantulaOperations + Send + Sync>,
     user_chats: Arc<RwLock<HashMap<u64, ChatId>>>,
 }
 
 impl NotificationSystem {
-    pub fn new(bot: Bot, db: Arc<TarantulaDB>) -> Self {
+    pub fn new(bot: Bot, db: Arc<dyn TarantulaOperations + Send + Sync>) -> Self {
         Self {
             bot,
             db,
@@ -43,12 +44,15 @@ impl NotificationSystem {
 
     async fn run_feeding_checks(self) {
         log::debug!("Starting feeding checks");
-        let mut interval = time::interval(Duration::from_secs(86400));
         let mut message = String::with_capacity(1024);
 
+        let mut next_check = Local::now();
         loop {
-            interval.tick().await;
-            let user_chats = self.user_chats.read().await;
+            next_check = next_check.date().succ_opt().unwrap().and_hms_opt(9, 0, 0).unwrap();
+            let sleep_duration = next_check - Local::now();
+            time::sleep(sleep_duration.to_std().unwrap()).await;
+
+            let user_chats = self.user_chats.read().await.clone();
 
             for (&user_id, &chat_id) in user_chats.iter() {
                 if let Ok(due_feedings) = self.db.get_tarantulas_due_feeding(user_id).await {
@@ -56,7 +60,6 @@ impl NotificationSystem {
                         message.clear();
                         message.push_str("🍽 *Feeding Due*\n\n");
 
-                        
                         let mut never_fed = Vec::new();
                         let mut overdue = Vec::new();
                         let mut due = Vec::new();
@@ -71,7 +74,6 @@ impl NotificationSystem {
                             }
                         }
 
-                        
                         if !never_fed.is_empty() {
                             message.push_str("❗️ *Never Fed*\n");
                             for t in never_fed {
@@ -80,7 +82,6 @@ impl NotificationSystem {
                             message.push('\n');
                         }
 
-                        
                         if !overdue.is_empty() {
                             message.push_str("⚠️ *Overdue*\n");
                             for t in overdue {
@@ -94,7 +95,6 @@ impl NotificationSystem {
                             message.push('\n');
                         }
 
-                        
                         if !due.is_empty() {
                             message.push_str("📅 *Due for Feeding*\n");
                             for t in due {
@@ -121,7 +121,7 @@ impl NotificationSystem {
     }
     async fn run_health_checks(self) {
         log::debug!("Starting health checks");
-        let mut interval = time::interval(Duration::from_secs(3600));
+        let mut interval = time::interval(HEALTH_CHECK_INTERVAL);
         let mut message = String::with_capacity(1024);
 
         loop {
