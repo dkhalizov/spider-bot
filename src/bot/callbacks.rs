@@ -84,7 +84,7 @@ impl BotCallback {
         bot: &Arc<TarantulaBot>,
         query: CallbackQuery,
     ) -> BotResult<()> {
-        log::info!("{:?}", query);
+        //log::info!("{:?}", query);
         if let Some(chat_id) = query.chat_id() {
             bot.list_tarantulas(chat_id, query.message.unwrap().id(), query.from.id.0)
                 .await?;

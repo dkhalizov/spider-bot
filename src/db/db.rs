@@ -163,7 +163,7 @@ impl TarantulaDB {
         user_id: u64,
     ) -> BotResult<Vec<TarantulaListItem>> {
         let sql = "WITH LastFeeding AS (
-            SELECT 
+            SELECT
                 tarantula_id,
                 MAX(feeding_date) as last_feeding_date,
                 julianday('now') - julianday(MAX(feeding_date)) as days_since_feeding
@@ -172,12 +172,12 @@ impl TarantulaDB {
         ),
         CurrentSize AS (
             -- Get the most recent size measurement from molt records
-            SELECT 
+            SELECT
                 t.id as tarantula_id,
                 COALESCE(
                     mr.post_molt_length_cm,
                     -- If no measurements, use a size category based on species
-                    CASE 
+                    CASE
                         WHEN ts.adult_size_cm <= 8 THEN ts.adult_size_cm * 0.3  -- Dwarf species start smaller
                         ELSE ts.adult_size_cm * 0.4  -- Regular species
                     END
@@ -186,22 +186,22 @@ impl TarantulaDB {
             JOIN tarantula_species ts ON t.species_id = ts.id
             LEFT JOIN (
                 SELECT tarantula_id, post_molt_length_cm
-                FROM molt_records 
+                FROM molt_records
                 WHERE molt_date = (
-                    SELECT MAX(molt_date) 
-                    FROM molt_records mr2 
+                    SELECT MAX(molt_date)
+                    FROM molt_records mr2
                     WHERE mr2.tarantula_id = molt_records.tarantula_id
                     AND mr2.post_molt_length_cm IS NOT NULL
                 )
             ) mr ON t.id = mr.tarantula_id
         ),
         TarantulaSchedule AS (
-            SELECT 
+            SELECT
                 t.id as tarantula_id,
                 fs.feeding_frequency,
                 ff.min_days,
                 ff.max_days,
-                CASE 
+                CASE
                     WHEN ms.stage_name = 'Pre-molt' THEN true
                     ELSE false
                 END as is_premolt
@@ -211,7 +211,7 @@ impl TarantulaDB {
             JOIN feeding_schedules fs ON ts.id = fs.species_id
             JOIN feeding_frequencies ff ON fs.frequency_id = ff.id
             LEFT JOIN molt_stages ms ON t.current_molt_stage_id = ms.id
-            WHERE 
+            WHERE
                 fs.size_category = (
                     SELECT size_category
                     FROM feeding_schedules fs2
@@ -221,16 +221,16 @@ impl TarantulaDB {
                     LIMIT 1
                 )
         )
-        SELECT 
+        SELECT
             t.id,
             t.name,
             ts.common_name as species_name,
             t.enclosure_number,
             COALESCE(lf.days_since_feeding, 999) as days_since_feeding,
-            CASE 
+            CASE
                 WHEN ts2.is_premolt THEN 'In pre-molt'
                 WHEN lf.days_since_feeding IS NULL THEN 'Never fed'
-                WHEN lf.days_since_feeding > ts2.max_days THEN 
+                WHEN lf.days_since_feeding > ts2.max_days THEN
                     'Overdue feeding (' || ts2.feeding_frequency || ')'
                 ELSE 'Due for feeding'
             END as current_status
@@ -238,15 +238,15 @@ impl TarantulaDB {
         JOIN tarantula_species ts ON t.species_id = ts.id
         JOIN TarantulaSchedule ts2 ON t.id = ts2.tarantula_id
         LEFT JOIN LastFeeding lf ON t.id = lf.tarantula_id
-        WHERE 
+        WHERE
             t.user_id = ? AND
             NOT ts2.is_premolt AND
             (
                 lf.days_since_feeding IS NULL OR
                 lf.days_since_feeding > ts2.max_days
             )
-        ORDER BY 
-            CASE 
+        ORDER BY
+            CASE
                 WHEN lf.days_since_feeding IS NULL THEN 999
                 ELSE lf.days_since_feeding
             END DESC".to_string();
@@ -703,7 +703,8 @@ WHERE t.user_id = ?
                 ms.stage_name as stage,
                 mr.pre_molt_length_cm,
                 mr.complications,
-                mr.notes
+                mr.notes,
+                mr.post_molt_length_cm
             FROM molt_records mr
             JOIN tarantulas t ON mr.tarantula_id = t.id
             JOIN molt_stages ms ON mr.molt_stage_id = ms.id
@@ -766,7 +767,7 @@ WHERE t.user_id = ?
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, height_cm, width_cm, length_cm, substrate_depth_cm, notes, user_id
-             FROM enclosures 
+             FROM enclosures
              WHERE id = ? AND user_id = ?",
         )?;
 
@@ -788,7 +789,7 @@ WHERE t.user_id = ?
     pub async fn create_maintenance_record(&self, record: &MaintenanceRecord) -> BotResult<i64> {
         let conn = self.pool.get()?;
         conn.execute(
-            "INSERT INTO maintenance_records (enclosure_id, maintenance_date, temperature_celsius, 
+            "INSERT INTO maintenance_records (enclosure_id, maintenance_date, temperature_celsius,
              humidity_percent, notes, user_id)
              VALUES (?, ?, ?, ?, ?, ?)",
             params![
@@ -832,10 +833,10 @@ WHERE t.user_id = ?
     pub async fn get_feeding_schedule(&self, species_id: i64, body_length_cm: f32) -> BotResult<Option<FeedingSchedule>> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT fs.species_id, fs.size_category, fs.body_length_cm, fs.prey_size, 
+            "SELECT fs.species_id, fs.size_category, fs.body_length_cm, fs.prey_size,
                     fs.feeding_frequency, fs.prey_type, fs.notes, fs.frequency_id
              FROM feeding_schedules fs
-             WHERE fs.species_id = ? 
+             WHERE fs.species_id = ?
              AND fs.body_length_cm >= ?
              ORDER BY fs.body_length_cm ASC
              LIMIT 1",
@@ -861,7 +862,7 @@ WHERE t.user_id = ?
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, frequency_name, min_days, max_days, description
-             FROM feeding_frequencies 
+             FROM feeding_frequencies
              WHERE id = ?",
         )?;
 
@@ -882,7 +883,7 @@ WHERE t.user_id = ?
     pub async fn update_tarantula_enclosure(&self, tarantula_id: i64, enclosure_id: Option<i64>, user_id: i64) -> BotResult<()> {
         let conn = self.pool.get()?;
         conn.execute(
-            "UPDATE tarantulas 
+            "UPDATE tarantulas
              SET enclosure_id = ?
              WHERE id = ? AND user_id = ?",
             params![enclosure_id, tarantula_id, user_id],
@@ -894,34 +895,64 @@ WHERE t.user_id = ?
     pub(crate) async fn get_current_size(&self, tarantula_id: i64) -> BotResult<f32> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "WITH CurrentSize AS (
-                SELECT 
-                    COALESCE(
-                        mr.post_molt_length_cm,
-                        CASE 
-                            WHEN ts.adult_size_cm <= 8 THEN ts.adult_size_cm * 0.3
-                            ELSE ts.adult_size_cm * 0.4
-                        END
-                    ) as current_size_cm
-                FROM tarantulas t
-                JOIN tarantula_species ts ON t.species_id = ts.id
-                LEFT JOIN (
-                    SELECT tarantula_id, post_molt_length_cm
-                    FROM molt_records 
-                    WHERE molt_date = (
-                        SELECT MAX(molt_date) 
-                        FROM molt_records mr2 
-                        WHERE mr2.tarantula_id = molt_records.tarantula_id
-                        AND mr2.post_molt_length_cm IS NOT NULL
-                    )
-                ) mr ON t.id = mr.tarantula_id
-                WHERE t.id = ?
-            )
-            SELECT current_size_cm FROM CurrentSize",
+            "WITH LastMoltSize AS (
+    SELECT 
+        tarantula_id,
+        post_molt_length_cm,
+        molt_date
+    FROM molt_records 
+    WHERE molt_date = (
+        SELECT MAX(molt_date)
+        FROM molt_records mr2
+        WHERE mr2.tarantula_id = molt_records.tarantula_id
+        AND mr2.post_molt_length_cm IS NOT NULL
+    )
+),
+EstimatedSize AS (
+    SELECT
+        t.id as tarantula_id,
+        COALESCE(
+            lms.post_molt_length_cm,
+            CASE 
+                -- If we have a molt stage, use feeding schedule size
+                WHEN t.current_molt_stage_id IS NOT NULL THEN
+                    (SELECT fs.body_length_cm
+                     FROM feeding_schedules fs
+                     WHERE fs.species_id = t.species_id
+                     AND CASE 
+                         WHEN ms.stage_name LIKE '%spiderling%' THEN 'Spiderling'
+                         WHEN ms.stage_name LIKE '%juvenile%' THEN 'Juvenile'
+                         WHEN ms.stage_name LIKE '%sub%adult%' THEN 'Sub-Adult'
+                         WHEN ms.stage_name LIKE '%adult%' THEN 'Adult'
+                     END = fs.size_category
+                     LIMIT 1)
+                -- If we have estimated age, make a reasonable guess
+                WHEN t.estimated_age_months IS NOT NULL THEN
+                    CASE 
+                        WHEN t.estimated_age_months < 6 THEN ts.adult_size_cm * 0.2
+                        WHEN t.estimated_age_months < 12 THEN ts.adult_size_cm * 0.4
+                        WHEN t.estimated_age_months < 24 THEN ts.adult_size_cm * 0.6
+                        ELSE ts.adult_size_cm * 0.8
+                    END
+                -- Last resort: use adult size if acquisition date > 2 years
+                ELSE 
+                    CASE 
+                        WHEN julianday('now') - julianday(t.acquisition_date) > 730 THEN ts.adult_size_cm
+                        ELSE ts.adult_size_cm * 0.5
+                    END
+            END
+        ) as current_size_cm
+    FROM tarantulas t
+    JOIN tarantula_species ts ON t.species_id = ts.id
+    LEFT JOIN molt_stages ms ON t.current_molt_stage_id = ms.id
+    LEFT JOIN LastMoltSize lms ON t.id = lms.tarantula_id
+    WHERE t.id = ?
+)
+SELECT current_size_cm FROM EstimatedSize;",
         )?;
 
         let size = stmt.query_row(params![tarantula_id], |row| row.get::<_, f32>(0))?;
         Ok(size)
     }
-    
+
 }
