@@ -1,10 +1,14 @@
 use crate::bot::bot::TarantulaBot;
 use crate::bot::callbacks::BotCallback;
-use crate::bot::callbacks::BotCallback::{Colonies, ColonyMaintenance, FeedingSchedule, HealthAlerts, ListTarantulas, MainMenu, Maintenance, MoltHistory, RecordFeeding, RecordHealthCheck, RecordMolt, StatusOverview, ViewRecords};
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+use crate::bot::callbacks::BotCallback::{
+    Colonies, ColonyMaintenance, FeedingSchedule, HealthAlerts, ListTarantulas, MainMenu,
+    Maintenance, MoltHistory, RecordFeeding, RecordHealthCheck, RecordMolt, StatusOverview,
+    ViewRecords,
+};
 use crate::models::cricket::ColonyStatus;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-pub(crate) fn welcome_keyboard()-> InlineKeyboardMarkup {
+pub(crate) fn welcome_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![
             InlineKeyboardButton::callback("🕷 List Tarantulas", ListTarantulas.to_string()),
@@ -16,10 +20,7 @@ pub(crate) fn welcome_keyboard()-> InlineKeyboardMarkup {
         ],
         vec![
             InlineKeyboardButton::callback("🏥 Health Alerts", HealthAlerts.to_string()),
-            InlineKeyboardButton::callback(
-                "🔍 Record Health Check",
-                RecordHealthCheck.to_string(),
-            ),
+            InlineKeyboardButton::callback("🔍 Record Health Check", RecordHealthCheck.to_string()),
         ],
         vec![
             InlineKeyboardButton::callback("🐾 Recent Molts", MoltHistory.to_string()),
@@ -27,10 +28,7 @@ pub(crate) fn welcome_keyboard()-> InlineKeyboardMarkup {
         ],
         vec![
             InlineKeyboardButton::callback("🦗 Colony Status", Colonies.to_string()),
-            InlineKeyboardButton::callback(
-                "🧰 Colony Maintenance",
-                ColonyMaintenance.to_string(),
-            ),
+            InlineKeyboardButton::callback("🧰 Colony Maintenance", ColonyMaintenance.to_string()),
         ],
         vec![
             InlineKeyboardButton::callback("🧹 Maintenance Tasks", Maintenance.to_string()),
@@ -50,7 +48,7 @@ pub(crate) fn feed_count_selection_keyboard(
     tarantula_id: i64,
     colony_id: i64,
 ) -> InlineKeyboardMarkup {
-     InlineKeyboardMarkup::new(vec![
+    InlineKeyboardMarkup::new(vec![
         vec![
             InlineKeyboardButton::callback(
                 "1 cricket",
@@ -78,7 +76,10 @@ pub(crate) fn feed_count_selection_keyboard(
     ])
 }
 
-pub(crate) fn feed_command_keyboard(tarantula_id: i64, colonies: Vec<ColonyStatus>) -> Vec<Vec<InlineKeyboardButton>> {
+pub(crate) fn feed_command_keyboard(
+    tarantula_id: i64,
+    colonies: Vec<ColonyStatus>,
+) -> Vec<Vec<InlineKeyboardButton>> {
     let mut keyboard: Vec<Vec<InlineKeyboardButton>> = colonies
         .chunks(2)
         .map(|chunk| {
@@ -93,10 +94,32 @@ pub(crate) fn feed_command_keyboard(tarantula_id: i64, colonies: Vec<ColonyStatu
                 .collect()
         })
         .collect();
-
+    keyboard.push(vec![InlineKeyboardButton::callback(
+        "📋 View Schedule",
+        BotCallback::ViewFeedingSchedule(tarantula_id).to_string(),
+    )]);
     keyboard.push(vec![InlineKeyboardButton::callback(
         "« Cancel",
         MainMenu.to_string(),
     )]);
     keyboard
+}
+
+pub(crate) fn tarantula_detail_keyboard(tarantula_id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback(
+                "🍽 Feed",
+                BotCallback::FeedSelectColony(tarantula_id, 0).to_string(),
+            ),
+            InlineKeyboardButton::callback(
+                "📋 Schedule",
+                BotCallback::ViewFeedingSchedule(tarantula_id).to_string(),
+            ),
+        ],
+        vec![InlineKeyboardButton::callback(
+            "« Back to List",
+            BotCallback::ListTarantulas.to_string(),
+        )],
+    ])
 }

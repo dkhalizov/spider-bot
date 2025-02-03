@@ -36,7 +36,9 @@ use teloxide::types::{
 };
 use teloxide::utils::command::BotCommands;
 use teloxide::{dptree, filter_command, Bot, RequestError};
-use BotCallback::{FeedingSchedule, ListTarantulas, StatusOverview};
+use BotCallback::{
+    FeedingSchedule, ListTarantulas, StatusOverview,
+};
 
 #[derive(Clone)]
 pub struct TarantulaBot {
@@ -528,10 +530,11 @@ impl TarantulaBot {
         chat_id: ChatId,
         message_id: MessageId,
         tarantula_id: i64,
+        size: Option<f32>,
         user_id: u64,
     ) -> BotResult<()> {
         self.db
-            .record_molt(tarantula_id, None, None, None, user_id)
+            .record_molt(tarantula_id, size, None, None, user_id)
             .await?;
 
         let keyboard = Self::back_to_menu_keyboard();
@@ -931,7 +934,8 @@ impl TarantulaBot {
                     .map(|t| {
                         InlineKeyboardButton::callback(
                             format!("{} ({})", t.name, t.species_name),
-                            MoltSimple(t.id).to_string(),
+                            //todo add actual size
+                            MoltSimple(0.0, t.id).to_string(),
                         )
                     })
                     .collect()
@@ -1053,6 +1057,58 @@ impl TarantulaBot {
             keyboard,
         )
         .await
+    }
+
+    pub(crate) async fn view_feeding_schedule(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        tarantula_id: i64,
+        user_id: u64,
+    ) -> BotResult<()> {
+        // Get tarantula details
+        let tarantula = self.db.get_tarantula_by_id(user_id, tarantula_id).await?;
+
+        // Get current size and appropriate schedule
+        let current_size = self.db.get_current_size(tarantula_id).await?;
+        let schedule = self
+            .db
+            .get_feeding_schedule(tarantula.species_id, current_size)
+            .await?.unwrap();
+
+        let frequency = self
+            .db
+            .get_feeding_frequency(schedule.frequency_id.unwrap_or(1))
+            .await?.unwrap();
+
+        let message = format!(
+            "*Feeding Schedule for {}*\n\n\
+            🦗 *Current Stage:* {}\n\
+            📏 *Size:* {:.1} cm\n\
+            🍽 *Prey Size:* {}\n\
+            ⏱ *Feeding Frequency:* {}\n\
+            🦗 *Prey Type:* {}\n\n\
+            ℹ️ {}\n\n\
+            _Feeding window: Every {} to {} days_",
+            tarantula.name,
+            schedule.size_category,
+            current_size,
+            schedule.prey_size,
+            schedule.feeding_frequency,
+            schedule.prey_type,
+            schedule.notes.unwrap_or_default(),
+            frequency.min_days,
+            frequency.max_days
+        );
+
+        let keyboard = InlineKeyboardMarkup::new(vec![
+            vec![InlineKeyboardButton::callback(
+                "« Back",
+                ListTarantulas.to_string(),
+            )],
+        ]);
+        self.replay_with_edit(chat_id, message_id, message, keyboard)
+            .await
     }
 
     async fn reply_with_send(

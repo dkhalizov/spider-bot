@@ -63,4 +63,4 @@ VALUES
     (47, 'Cyriocosmus elegans', 'Trinidad Dwarf Tiger', 6.0, 'Docile', 70, 25.0),
     (48, 'Neoholothele incei gold', 'Trinidad Olive Gold', 8.0, 'Docile', 70, 25.0),
     (49, 'Homoeomma sp. peru', 'Peru Dwarf', 8.0, 'Docile', 65, 24.0),
-    (50, 'Kochiana brunnipes', 'Brazilian Dwarf Beauty', 7.0, 'Docile', 70, 24.0);
+    (50, 'Kochiana brunnipes', 'Brazilian Dwarf Beauty', 7.0, 'Docile', 70, 24.0) ON CONFLICT DO NOTHING ;

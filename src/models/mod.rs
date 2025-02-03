@@ -6,3 +6,4 @@ pub mod molt;
 pub mod tarantula;
 pub mod enums;
 pub(crate) mod user;
+pub mod new;

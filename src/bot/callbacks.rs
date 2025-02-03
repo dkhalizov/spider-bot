@@ -31,12 +31,14 @@ pub enum BotCallback {
     FeedTarantula(i64),
     HealthCheck(i64),
     HealthStatus(i64, i64), // tarantula_id, health_status_id
-    MoltSimple(i64),
+    MoltSimple(f32, i64), // size cm after, tarantula_id
     ColonyMaintenanceMenu(i64),
     FeedSelectColony(i64, i64), // tarantula_id, colony_id
     FeedConfirm(i64, i64, i32), // tarantula_id, colony_id, count
     ColonyGetCount(i64),
     ColonyCountUpdate(i64, i32), // colony_id, adjustment
+
+    ViewFeedingSchedule(i64), // tarantula_id
 }
 
 #[async_trait]
@@ -335,11 +337,12 @@ impl BotCallback {
         &self,
         bot: &Arc<TarantulaBot>,
         query: CallbackQuery,
+        size: &f32,
         tarantula_id: &i64,
     ) -> BotResult<()> {
         if let Some(chat_id) = query.chat_id() {
             if let Some(msg) = query.message {
-                bot.record_molt_command(chat_id, msg.id(), *tarantula_id, query.from.id.0)
+                bot.record_molt_command(chat_id, msg.id(), *tarantula_id, Some(*size), query.from.id.0)
                     .await?;
             }
         };
@@ -443,4 +446,19 @@ impl BotCallback {
         };
         Ok(())
     }
+    async fn handle_view_feeding_schedule(
+        &self,
+        bot: &TarantulaBot,
+        query: CallbackQuery,
+        tarantula_id: &i64,
+    ) -> BotResult<()> {
+        if let Some(chat_id) = query.chat_id() {
+            if let Some(msg) = query.message {
+                bot.view_feeding_schedule(chat_id, msg.id(), *tarantula_id, query.from.id.0)
+                    .await?;
+            }
+        };
+        Ok(())
+    }
+    
 }

@@ -6,6 +6,7 @@ pub struct MoltRecord {
     pub molt_date: String,
     pub stage: String,
     pub pre_molt_length_cm: Option<f32>,
+    pub post_molt_length_cm: Option<f32>,
     pub complications: Option<String>,
     pub notes: Option<String>,
 }

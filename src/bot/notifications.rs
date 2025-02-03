@@ -1,12 +1,12 @@
+use crate::db::db::TarantulaDB;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::time::{self, Duration};
-use teloxide::Bot;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::{ChatId, Requester};
 use teloxide::types::ParseMode;
+use teloxide::Bot;
 use tokio::sync::RwLock;
-use crate::db::db::TarantulaDB;
+use tokio::time::{self, Duration};
 
 #[derive(Clone)]
 pub struct NotificationSystem {
@@ -51,28 +51,74 @@ impl NotificationSystem {
             let user_chats = self.user_chats.read().await;
 
             for (&user_id, &chat_id) in user_chats.iter() {
-                if let Ok(feedings) = self.db.get_tarantulas_due_feeding(user_id).await {
-                    if !feedings.is_empty() {
+                if let Ok(due_feedings) = self.db.get_tarantulas_due_feeding(user_id).await {
+                    if !due_feedings.is_empty() {
                         message.clear();
                         message.push_str("🍽 *Feeding Due*\n\n");
 
-                        for t in &feedings {
-                            use std::fmt::Write;
-                            let _ = writeln!(message, "• {} - {} days since last feeding",
-                                             t.name,
-                                             t.days_since_feeding.unwrap_or(0.0)
-                            );
+                        // Group by status
+                        let mut never_fed = Vec::new();
+                        let mut overdue = Vec::new();
+                        let mut due = Vec::new();
+
+                        for t in &due_feedings {
+                            if t.current_status.contains("Never fed") {
+                                never_fed.push(t);
+                            } else if t.current_status.contains("Overdue") {
+                                overdue.push(t);
+                            } else {
+                                due.push(t);
+                            }
                         }
 
-                        let _ = self.bot.send_message(chat_id, &message)
-                            .parse_mode(ParseMode::Html)
-                            .await;
+                        // Never fed section
+                        if !never_fed.is_empty() {
+                            message.push_str("❗️ *Never Fed*\n");
+                            for t in never_fed {
+                                message.push_str(&format!("• {} ({})\n", t.name, t.species_name));
+                            }
+                            message.push('\n');
+                        }
+
+                        // Overdue section
+                        if !overdue.is_empty() {
+                            message.push_str("⚠️ *Overdue*\n");
+                            for t in overdue {
+                                message.push_str(&format!(
+                                    "• {} - {} ({} days since last feeding)\n",
+                                    t.name,
+                                    t.current_status,
+                                    t.days_since_feeding.unwrap_or(0.0) as i32
+                                ));
+                            }
+                            message.push('\n');
+                        }
+
+                        // Due section
+                        if !due.is_empty() {
+                            message.push_str("📅 *Due for Feeding*\n");
+                            for t in due {
+                                message.push_str(&format!(
+                                    "• {} - {} days since last feeding\n",
+                                    t.name,
+                                    t.days_since_feeding.unwrap_or(0.0) as i32
+                                ));
+                            }
+                        }
+
+                        if let Err(e) = self
+                            .bot
+                            .send_message(chat_id, &message)
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await
+                        {
+                            log::error!("Error sending feeding notification: {}", e);
+                        }
                     }
                 }
             }
         }
     }
-
     async fn run_health_checks(self) {
         log::debug!("Starting health checks");
         let mut interval = time::interval(Duration::from_secs(3600));
@@ -84,8 +130,7 @@ impl NotificationSystem {
 
             for (&user_id, &chat_id) in user_chats.iter() {
                 if let Ok(alerts) = self.db.get_health_alerts(user_id).await {
-                    let critical = alerts.iter()
-                        .filter(|a| a.alert_type == "Critical");
+                    let critical = alerts.iter().filter(|a| a.alert_type == "Critical");
 
                     message.clear();
                     let mut has_alerts = false;
@@ -98,7 +143,9 @@ impl NotificationSystem {
                     }
 
                     if has_alerts {
-                        let _ = self.bot.send_message(chat_id, &message)
+                        let _ = self
+                            .bot
+                            .send_message(chat_id, &message)
                             .parse_mode(ParseMode::Html)
                             .await;
                     }
@@ -118,7 +165,8 @@ impl NotificationSystem {
 
             for (&user_id, &chat_id) in user_chats.iter() {
                 if let Ok(colonies) = self.db.get_colony_status(user_id).await {
-                    let low_colonies = colonies.iter()
+                    let low_colonies = colonies
+                        .iter()
                         .filter(|c| c.weeks_remaining.unwrap_or(0.0) < 2.0);
 
                     message.clear();
@@ -128,14 +176,18 @@ impl NotificationSystem {
                     for colony in low_colonies {
                         has_alerts = true;
                         use std::fmt::Write;
-                        let _ = writeln!(message, "• {} - {:.1} weeks remaining",
-                                         colony.colony_name,
-                                         colony.weeks_remaining.unwrap_or(0.0)
+                        let _ = writeln!(
+                            message,
+                            "• {} - {:.1} weeks remaining",
+                            colony.colony_name,
+                            colony.weeks_remaining.unwrap_or(0.0)
                         );
                     }
 
                     if has_alerts {
-                        let _ = self.bot.send_message(chat_id, &message)
+                        let _ = self
+                            .bot
+                            .send_message(chat_id, &message)
                             .parse_mode(ParseMode::Html)
                             .await;
                     }

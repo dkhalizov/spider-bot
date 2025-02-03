@@ -10,8 +10,9 @@ use crate::models::user::TelegramUser;
 use crate::BotResult;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::sync::Arc;
+use crate::models::new::{Enclosure, FeedingFrequency, FeedingSchedule, MaintenanceRecord};
 
 pub struct TarantulaDB {
     pool: Arc<Pool<SqliteConnectionManager>>,
@@ -161,25 +162,94 @@ impl TarantulaDB {
         &self,
         user_id: u64,
     ) -> BotResult<Vec<TarantulaListItem>> {
-        let sql = format!(
-            "
-        SELECT
+        let sql = "WITH LastFeeding AS (
+            SELECT 
+                tarantula_id,
+                MAX(feeding_date) as last_feeding_date,
+                julianday('now') - julianday(MAX(feeding_date)) as days_since_feeding
+            FROM feeding_events
+            GROUP BY tarantula_id
+        ),
+        CurrentSize AS (
+            -- Get the most recent size measurement from molt records
+            SELECT 
+                t.id as tarantula_id,
+                COALESCE(
+                    mr.post_molt_length_cm,
+                    -- If no measurements, use a size category based on species
+                    CASE 
+                        WHEN ts.adult_size_cm <= 8 THEN ts.adult_size_cm * 0.3  -- Dwarf species start smaller
+                        ELSE ts.adult_size_cm * 0.4  -- Regular species
+                    END
+                ) as current_size_cm
+            FROM tarantulas t
+            JOIN tarantula_species ts ON t.species_id = ts.id
+            LEFT JOIN (
+                SELECT tarantula_id, post_molt_length_cm
+                FROM molt_records 
+                WHERE molt_date = (
+                    SELECT MAX(molt_date) 
+                    FROM molt_records mr2 
+                    WHERE mr2.tarantula_id = molt_records.tarantula_id
+                    AND mr2.post_molt_length_cm IS NOT NULL
+                )
+            ) mr ON t.id = mr.tarantula_id
+        ),
+        TarantulaSchedule AS (
+            SELECT 
+                t.id as tarantula_id,
+                fs.feeding_frequency,
+                ff.min_days,
+                ff.max_days,
+                CASE 
+                    WHEN ms.stage_name = 'Pre-molt' THEN true
+                    ELSE false
+                END as is_premolt
+            FROM tarantulas t
+            JOIN tarantula_species ts ON t.species_id = ts.id
+            JOIN CurrentSize cs ON t.id = cs.tarantula_id
+            JOIN feeding_schedules fs ON ts.id = fs.species_id
+            JOIN feeding_frequencies ff ON fs.frequency_id = ff.id
+            LEFT JOIN molt_stages ms ON t.current_molt_stage_id = ms.id
+            WHERE 
+                fs.size_category = (
+                    SELECT size_category
+                    FROM feeding_schedules fs2
+                    WHERE fs2.species_id = ts.id
+                    AND fs2.body_length_cm >= cs.current_size_cm
+                    ORDER BY fs2.body_length_cm ASC
+                    LIMIT 1
+                )
+        )
+        SELECT 
             t.id,
             t.name,
             ts.common_name as species_name,
             t.enclosure_number,
-            julianday('now') - julianday(MAX(f.feeding_date)) as days_since_feeding,
-            'Needs feeding' as current_status
+            COALESCE(lf.days_since_feeding, 999) as days_since_feeding,
+            CASE 
+                WHEN ts2.is_premolt THEN 'In pre-molt'
+                WHEN lf.days_since_feeding IS NULL THEN 'Never fed'
+                WHEN lf.days_since_feeding > ts2.max_days THEN 
+                    'Overdue feeding (' || ts2.feeding_frequency || ')'
+                ELSE 'Due for feeding'
+            END as current_status
         FROM tarantulas t
         JOIN tarantula_species ts ON t.species_id = ts.id
-        LEFT JOIN feeding_events f ON t.id = f.tarantula_id
-        LEFT JOIN molt_stages ms ON t.current_molt_stage_id = ms.id
-        WHERE ms.stage_name != '{}' AND t.user_id = ?
-        GROUP BY t.id
-        HAVING days_since_feeding > 7
-        ORDER BY days_since_feeding DESC",
-            MoltStage::PreMolt.to_db_name()
-        );
+        JOIN TarantulaSchedule ts2 ON t.id = ts2.tarantula_id
+        LEFT JOIN LastFeeding lf ON t.id = lf.tarantula_id
+        WHERE 
+            t.user_id = ? AND
+            NOT ts2.is_premolt AND
+            (
+                lf.days_since_feeding IS NULL OR
+                lf.days_since_feeding > ts2.max_days
+            )
+        ORDER BY 
+            CASE 
+                WHEN lf.days_since_feeding IS NULL THEN 999
+                ELSE lf.days_since_feeding
+            END DESC".to_string();
 
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(&sql)?;
@@ -302,7 +372,7 @@ impl TarantulaDB {
         tx.execute(
             "INSERT INTO molt_records (
             tarantula_id, molt_date, molt_stage_id,
-            pre_molt_length_cm, complications, notes, user_id
+            post_molt_length_cm, complications, notes, user_id
         ) VALUES (?, datetime('now'), ?, ?, ?, ?, ?)",
             params![
                 tarantula_id,
@@ -651,6 +721,7 @@ WHERE t.user_id = ?
                 pre_molt_length_cm: row.get(3)?,
                 complications: row.get(4)?,
                 notes: row.get(5)?,
+                post_molt_length_cm: row.get(6)?,
             })
         })?;
 
@@ -674,4 +745,183 @@ WHERE t.user_id = ?
         )?;
         Ok(())
     }
+    pub async fn create_enclosure(&self, enclosure: &Enclosure) -> BotResult<i64> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "INSERT INTO enclosures (name, height_cm, width_cm, length_cm, substrate_depth_cm, notes, user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                enclosure.name,
+                enclosure.height_cm,
+                enclosure.width_cm,
+                enclosure.length_cm,
+                enclosure.substrate_depth_cm,
+                enclosure.notes,
+                enclosure.user_id,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+    pub async fn get_enclosure(&self, id: i64, user_id: i64) -> BotResult<Enclosure> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, height_cm, width_cm, length_cm, substrate_depth_cm, notes, user_id
+             FROM enclosures 
+             WHERE id = ? AND user_id = ?",
+        )?;
+
+        let enclosure = stmt.query_row(params![id, user_id], |row| {
+            Ok(Enclosure {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                height_cm: row.get(2)?,
+                width_cm: row.get(3)?,
+                length_cm: row.get(4)?,
+                substrate_depth_cm: row.get(5)?,
+                notes: row.get(6)?,
+                user_id: row.get(7)?,
+            })
+        })?;
+
+        Ok(enclosure)
+    }
+    pub async fn create_maintenance_record(&self, record: &MaintenanceRecord) -> BotResult<i64> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "INSERT INTO maintenance_records (enclosure_id, maintenance_date, temperature_celsius, 
+             humidity_percent, notes, user_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                record.enclosure_id,
+                record.maintenance_date,
+                record.temperature_celsius,
+                record.humidity_percent,
+                record.notes,
+                record.user_id,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub async fn get_maintenance_history(&self, enclosure_id: i64, user_id: i64) -> BotResult<Vec<MaintenanceRecord>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, enclosure_id, maintenance_date, temperature_celsius, humidity_percent, notes, user_id
+             FROM maintenance_records
+             WHERE enclosure_id = ? AND user_id = ?
+             ORDER BY maintenance_date DESC",
+        )?;
+
+        let records = stmt.query_map(params![enclosure_id, user_id], |row| {
+            Ok(MaintenanceRecord {
+                id: Some(row.get(0)?),
+                enclosure_id: row.get(1)?,
+                maintenance_date: row.get(2)?,
+                temperature_celsius: row.get(3)?,
+                humidity_percent: row.get(4)?,
+                notes: row.get(5)?,
+                user_id: row.get(6)?,
+            })
+        })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(records)
+    }
+
+    // Feeding Schedule Methods
+    pub async fn get_feeding_schedule(&self, species_id: i64, body_length_cm: f32) -> BotResult<Option<FeedingSchedule>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT fs.species_id, fs.size_category, fs.body_length_cm, fs.prey_size, 
+                    fs.feeding_frequency, fs.prey_type, fs.notes, fs.frequency_id
+             FROM feeding_schedules fs
+             WHERE fs.species_id = ? 
+             AND fs.body_length_cm >= ?
+             ORDER BY fs.body_length_cm ASC
+             LIMIT 1",
+        )?;
+
+        let schedule = stmt.query_row(params![species_id, body_length_cm], |row| {
+            Ok(FeedingSchedule {
+                species_id: row.get(0)?,
+                size_category: row.get(1)?,
+                body_length_cm: row.get(2)?,
+                prey_size: row.get(3)?,
+                feeding_frequency: row.get(4)?,
+                prey_type: row.get(5)?,
+                notes: row.get(6)?,
+                frequency_id: row.get(7)?,
+            })
+        }).optional()?;
+
+        Ok(schedule)
+    }
+
+    pub async fn get_feeding_frequency(&self, id: i64) -> BotResult<Option<FeedingFrequency>> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, frequency_name, min_days, max_days, description
+             FROM feeding_frequencies 
+             WHERE id = ?",
+        )?;
+
+        let frequency = stmt.query_row(params![id], |row| {
+            Ok(FeedingFrequency {
+                id: row.get(0)?,
+                frequency_name: row.get(1)?,
+                min_days: row.get(2)?,
+                max_days: row.get(3)?,
+                description: row.get(4)?,
+            })
+        }).optional()?;
+
+        Ok(frequency)
+    }
+
+    // Update existing methods to handle enclosure_id
+    pub async fn update_tarantula_enclosure(&self, tarantula_id: i64, enclosure_id: Option<i64>, user_id: i64) -> BotResult<()> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "UPDATE tarantulas 
+             SET enclosure_id = ?
+             WHERE id = ? AND user_id = ?",
+            params![enclosure_id, tarantula_id, user_id],
+        )?;
+        Ok(())
+    }
+
+    // Helper method to get current size
+    pub(crate) async fn get_current_size(&self, tarantula_id: i64) -> BotResult<f32> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "WITH CurrentSize AS (
+                SELECT 
+                    COALESCE(
+                        mr.post_molt_length_cm,
+                        CASE 
+                            WHEN ts.adult_size_cm <= 8 THEN ts.adult_size_cm * 0.3
+                            ELSE ts.adult_size_cm * 0.4
+                        END
+                    ) as current_size_cm
+                FROM tarantulas t
+                JOIN tarantula_species ts ON t.species_id = ts.id
+                LEFT JOIN (
+                    SELECT tarantula_id, post_molt_length_cm
+                    FROM molt_records 
+                    WHERE molt_date = (
+                        SELECT MAX(molt_date) 
+                        FROM molt_records mr2 
+                        WHERE mr2.tarantula_id = molt_records.tarantula_id
+                        AND mr2.post_molt_length_cm IS NOT NULL
+                    )
+                ) mr ON t.id = mr.tarantula_id
+                WHERE t.id = ?
+            )
+            SELECT current_size_cm FROM CurrentSize",
+        )?;
+
+        let size = stmt.query_row(params![tarantula_id], |row| row.get::<_, f32>(0))?;
+        Ok(size)
+    }
+    
 }
