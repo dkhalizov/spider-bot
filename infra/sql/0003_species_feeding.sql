@@ -1,10 +1,7 @@
--- Clear existing data
 DELETE FROM feeding_schedules;
 
--- Reset auto-increment
 DELETE FROM sqlite_sequence WHERE name='feeding_schedules';
 
--- Insert feeding schedules for species 1-10
 INSERT INTO feeding_schedules (species_id, size_category, body_length_cm, prey_size, feeding_frequency, prey_type, notes)
 VALUES
 -- Brachypelma hamorii (Mexican Red Knee) - ID: 1
@@ -67,7 +64,6 @@ VALUES
 (10, 'Sub-Adult', 7.0, '2-3 medium crickets', 'Every 7-10 days', 'Medium crickets, medium roaches', 'Consistent eater through growth'),
 (10, 'Adult', 12.0, '2-3 large crickets', 'Every 14 days', 'Large crickets, adult roaches', 'Maintains good appetite as adult');
 
--- Insert feeding schedules for species 11-20
 INSERT INTO feeding_schedules (species_id, size_category, body_length_cm, prey_size, feeding_frequency, prey_type, notes)
 VALUES
 -- Aphonopelma seemanni (Costa Rican Zebra) - ID: 11
@@ -130,7 +126,6 @@ VALUES
 (20, 'Sub-Adult', 7.0, '2-3 medium crickets', 'Every 7-10 days', 'Medium crickets, medium roaches', 'Watch for premolt signs'),
 (20, 'Adult', 13.0, '2-3 large crickets', 'Every 14-21 days', 'Large crickets, adult roaches', 'Similar care to other Tliltocatl species');
 
--- Insert feeding schedules for species 21-30
 INSERT INTO feeding_schedules (species_id, size_category, body_length_cm, prey_size, feeding_frequency, prey_type, notes)
 VALUES
 -- Poecilotheria regalis (Indian Ornamental) - ID: 21
@@ -193,7 +188,6 @@ VALUES
 (30, 'Sub-Adult', 7.0, '2-3 medium crickets', 'Every 7-10 days', 'Medium crickets, medium roaches', 'Fast and defensive'),
 (30, 'Adult', 12.0, '2-3 medium crickets', 'Every 14 days', 'Medium crickets, adult roaches', 'Feed with long tongs; ensure retreat path');
 
--- Insert feeding schedules for species 31-40
 INSERT INTO feeding_schedules (species_id, size_category, body_length_cm, prey_size, feeding_frequency, prey_type, notes)
 VALUES
 -- Monocentropus balfouri (Socotra Island Blue) - ID: 31
@@ -256,7 +250,6 @@ VALUES
 (40, 'Sub-Adult', 7.0, '2-3 medium crickets', 'Every 7-10 days', 'Medium crickets, medium roaches', 'Consistent eater'),
 (40, 'Adult', 13.0, '2-3 large crickets', 'Every 14-21 days', 'Large crickets, adult roaches', 'Regular feeding schedule');
 
--- Insert feeding schedules for species 41-50
 INSERT INTO feeding_schedules (species_id, size_category, body_length_cm, prey_size, feeding_frequency, prey_type, notes)
 VALUES
 -- Haploclastus devamatha (Indian Violet) - ID: 41

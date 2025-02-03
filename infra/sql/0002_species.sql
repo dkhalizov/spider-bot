@@ -1,6 +1,8 @@
-INSERT INTO tarantula_species (id, scientific_name, common_name, adult_size_cm, temperament, humidity_requirement_percent, temperature_requirement_celsius)
+INSERT INTO tarantula_species (id, scientific_name, common_name, adult_size_cm, temperament,
+                               humidity_requirement_percent, temperature_requirement_celsius)
 VALUES
     -- Beginner-Friendly Species
+    (1, 'Brachypelma hamorii', 'Mexican Red Knee', 14.0, 'Docile', 65, 24.0),
     (2, 'Grammostola pulchra', 'Brazilian Black', 15.0, 'Docile', 65, 24.0),
     (3, 'Aphonopelma chalcodes', 'Arizona Blonde', 11.0, 'Docile', 60, 25.0),
     (4, 'Tliltocatl albopilosus', 'Curly Hair', 13.0, 'Docile', 65, 24.0),
@@ -63,4 +65,5 @@ VALUES
     (47, 'Cyriocosmus elegans', 'Trinidad Dwarf Tiger', 6.0, 'Docile', 70, 25.0),
     (48, 'Neoholothele incei gold', 'Trinidad Olive Gold', 8.0, 'Docile', 70, 25.0),
     (49, 'Homoeomma sp. peru', 'Peru Dwarf', 8.0, 'Docile', 65, 24.0),
-    (50, 'Kochiana brunnipes', 'Brazilian Dwarf Beauty', 7.0, 'Docile', 70, 24.0) ON CONFLICT DO NOTHING ;
+    (50, 'Kochiana brunnipes', 'Brazilian Dwarf Beauty', 7.0, 'Docile', 70, 24.0)
+ON CONFLICT DO NOTHING;
