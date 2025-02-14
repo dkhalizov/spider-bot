@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  repository: ghcr.io/guliguligagaga/spider-bot
+  repository: ghcr.io/dkhalizov/spider-bot
   tag: latest
   pullPolicy: Always
 imagePullSecrets:

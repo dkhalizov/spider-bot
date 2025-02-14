@@ -40,7 +40,7 @@ use BotCallback::ListTarantulas;
 #[derive(Clone)]
 pub struct TarantulaBot {
     pub(crate) bot: Bot,
-    pub(crate) db: Arc<TarantulaDB>,
+    db: Arc<dyn TarantulaOperations>,
     pub(crate) notification_system: Arc<NotificationSystem>,
     dialogue: Arc<InMemStorage<DialogueState>>,
 }
